@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::iter;
 use std::path::Path;
 
 use cairo_annotations::annotations::coverage::{CodeLocation, SourceFileFullPath};
 use cairo_annotations::annotations::profiler::FunctionName;
 use cairo_lang_sierra::program::StatementIdx;
+use cairo_vm::vm::vm_core::VirtualMachine;
 use dap::types::{Scope, ScopePresentationhint, StackFrame, Variable};
 use dap::types::{Source, StackFramePresentationhint};
 
@@ -44,7 +46,7 @@ impl CallStack {
         self.flat_length() + self.build_stack_frames(ctx, statement_idx).count()
     }
 
-    pub fn update(&mut self, statement_idx: StatementIdx, ctx: &Context) {
+    pub fn update(&mut self, statement_idx: StatementIdx, ctx: &Context, _vm: &VirtualMachine) {
         // We can be sure that the `statement_idx` is different from the one which was the arg when
         // `action_on_new_statement` was set.
         // The reason is that both function call and return in sierra compile to one CASM instruction each.
@@ -65,7 +67,8 @@ impl CallStack {
             self.action_on_new_statement = Some(Action::Push(
                 self.build_stack_frames(ctx, statement_idx)
                     // TODO(#16)
-                    .zip(iter::repeat_with(|| FunctionVariables {}))
+                    // ctx.get_values_of_variables(statement_idx, vm),
+                    .zip(iter::repeat_with(FunctionVariables::default))
                     .collect(),
             ));
         } else if ctx.is_return_statement(statement_idx) {
@@ -95,12 +98,18 @@ impl CallStack {
         vec![scope]
     }
 
-    pub fn get_variables(&self, variables_reference: i64) -> Vec<Variable> {
+    pub fn get_variables(
+        &self,
+        variables_reference: i64,
+        statement_idx: StatementIdx,
+        ctx: &Context,
+        vm: &VirtualMachine,
+    ) -> Vec<Variable> {
         let flat_index = (variables_reference / 2 - 1) as usize;
-        let &FunctionVariables {} = if flat_index >= self.flat_length() {
-            // TODO(#16)
-            //  Build them on demand.
-            &FunctionVariables {}
+
+        let names_to_values = if flat_index >= self.flat_length() {
+            // Build them on demand.
+            ctx.get_values_of_variables(statement_idx, vm)
         } else {
             self.call_frames_and_vars
                 .iter()
@@ -108,9 +117,19 @@ impl CallStack {
                 .map(|(_, vars)| vars)
                 .nth(flat_index)
                 .unwrap()
+                .names_to_values
+                .clone()
         };
 
-        vec![]
+        names_to_values
+            .into_iter()
+            .map(|(name, value)| Variable {
+                name,
+                value,
+                variables_reference: 0,
+                ..Default::default()
+            })
+            .collect()
     }
 
     /// Builds a vector of stack frames, ordered from the least nested to the most nested element.
@@ -191,5 +210,7 @@ impl CallStack {
     }
 }
 
-// TODO(#16)
-struct FunctionVariables {}
+#[derive(Default)]
+struct FunctionVariables {
+    names_to_values: HashMap<String, String>,
+}

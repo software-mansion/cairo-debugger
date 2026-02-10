@@ -1,4 +1,3 @@
-use std::cmp::PartialEq;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -48,7 +47,7 @@ impl State {
         }
 
         self.current_statement_idx = ctx.statement_idx_for_pc(current_pc.offset);
-        self.call_stack.update(self.current_statement_idx, ctx);
+        self.call_stack.update(self.current_statement_idx, ctx, vm);
     }
 
     pub fn is_configuration_done(&self) -> bool {

@@ -6,8 +6,10 @@ edition = "2024"
 [dependencies]
 dap = { git = "https://github.com/software-mansion-labs/dap-rs", rev = "d26a3005fc37bb5127734dbfb0d8cadb6d5ca14b" }
 cairo-vm = { git = "https://github.com/software-mansion-labs/cairo-vm", rev = "4675b55df938162dbefb546242bafaf7d2d51efd", features = ["test_utils"] }
-cairo-annotations = { version = "0.7.0", features = ["cairo-lang"] }
-cairo-lang-sierra = "2.12.3"
+cairo-annotations = { git = "https://github.com/software-mansion/cairo-annotations", rev = "796939a0b3cb57f3751835915509ef3b7093288c", features = ["cairo-lang"] }
+cairo-lang-sierra = "=2.12.3"
+cairo-lang-sierra-to-casm = "=2.12.3"
+cairo-lang-casm = "=2.12.3"
 scarb-metadata = "1"
 serde_json = "1"
 tracing = "0.1"
