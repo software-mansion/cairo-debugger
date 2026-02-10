@@ -41,6 +41,7 @@ impl StepHooks for CairoDebugger {
         _hints_data: &[Box<dyn Any>],
         _constants: &HashMap<String, starknet_types_core::felt::Felt>,
     ) -> Result<(), VirtualMachineError> {
+        self.sync_with_vm_post_step();
         Ok(())
     }
 }

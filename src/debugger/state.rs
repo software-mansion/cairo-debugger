@@ -1,4 +1,3 @@
-use std::cmp::PartialEq;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -51,7 +50,7 @@ impl State {
         }
 
         self.current_statement_idx = ctx.statement_idx_for_pc(current_pc.offset);
-        self.call_stack.update(self.current_statement_idx, ctx);
+        self.call_stack.update_pre_step(self.current_statement_idx, ctx, vm);
     }
 
     pub fn is_configuration_done(&self) -> bool {
@@ -102,7 +101,7 @@ impl State {
         self.breakpoints.remove(source);
     }
 
-    pub fn was_breakpoint_hit(&mut self, ctx: &Context) -> bool {
+    pub fn was_breakpoint_hit(&mut self, ctx: &Context, vm: &VirtualMachine) -> bool {
         if self
             .breakpoints
             .values()
@@ -115,7 +114,7 @@ impl State {
         let location = ctx
             .code_location_for_statement_idx(self.current_statement_idx)
             .expect("Breakpoint statement was expected to have corresponding code location");
-        let ui_state = UiState::build(self, ctx);
+        let ui_state = UiState::build(self, ctx, vm);
         let breakpoint_hit = Some(BreakpointHit { location, ui_state });
 
         // If we hit the same breakpoint and the ui state is the same,
