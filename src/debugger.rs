@@ -105,11 +105,18 @@ impl CairoDebugger {
         let stop = match &self.state.step_action {
             Some(StepAction::StepIn { prev_line }) if *prev_line != current_line => true,
             Some(StepAction::Next { prev_line, depth })
-                if *depth >= self.state.call_stack.depth() && *prev_line != current_line =>
+                if *depth
+                    >= self.state.call_stack.depth(self.state.current_statement_idx, &self.ctx)
+                    && *prev_line != current_line =>
             {
                 true
             }
-            Some(StepAction::StepOut { depth }) if *depth > self.state.call_stack.depth() => true,
+            Some(StepAction::StepOut { depth })
+                if *depth
+                    > self.state.call_stack.depth(self.state.current_statement_idx, &self.ctx) =>
+            {
+                true
+            }
             _ => false,
         };
 
