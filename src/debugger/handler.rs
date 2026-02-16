@@ -185,8 +185,10 @@ pub fn handle_request(
             // This effectively "steps over" any function calls.
             let line = Line::create_from_statement_idx(state.current_statement_idx, ctx);
 
-            state.step_action =
-                Some(StepAction::Next { depth: state.call_stack.depth(), prev_line: line });
+            state.step_action = Some(StepAction::Next {
+                depth: state.call_stack.depth(state.current_statement_idx, ctx),
+                prev_line: line,
+            });
 
             state.resume_execution();
             Ok(ResponseBody::Next.into())
@@ -208,7 +210,7 @@ pub fn handle_request(
             // We record the current call stack depth. The debugger will resume execution
             // and only stop when it reaches a line in a shallower call stack depth, which
             // happens when the current function returns.
-            let depth = state.call_stack.depth();
+            let depth = state.call_stack.depth(state.current_statement_idx, ctx);
             if depth > 0 {
                 state.step_action = Some(StepAction::StepOut { depth });
             }
