@@ -1,14 +1,20 @@
+use std::collections::HashMap;
 use std::iter;
 use std::path::Path;
 
-use cairo_annotations::annotations::coverage::{CodeLocation, SourceFileFullPath};
+use cairo_annotations::annotations::coverage::{CodeLocation, SourceCodeSpan, SourceFileFullPath};
 use cairo_annotations::annotations::profiler::FunctionName;
+use cairo_lang_sierra::ids::VarId;
 use cairo_lang_sierra::program::StatementIdx;
+use cairo_vm::Felt252;
+use cairo_vm::vm::vm_core::VirtualMachine;
 use dap::types::{Scope, ScopePresentationhint, StackFrame, Variable};
 use dap::types::{Source, StackFramePresentationhint};
 
 use crate::debugger::MIN_OBJECT_REFERENCE;
 use crate::debugger::context::Context;
+
+pub type Wars = HashMap<String, (SourceCodeSpan, VarId, Vec<Felt252>)>;
 
 #[derive(Default)]
 pub struct CallStack {
@@ -24,7 +30,7 @@ pub struct CallStack {
     /// object reference for each stack frame is equal to its `1 + 2 * flat_index`
     /// where `flat_index` is its position in the flattened vector.
     /// For the variables' scope, the object reference is equal to `2 + 2 * flat_index`.
-    call_frames_and_vars: Vec<Vec<(StackFrame, FunctionVariables)>>,
+    call_frames_and_vars: Vec<(Vec<(StackFrame, Wars)>, StatementIdx)>,
 
     /// Modification that should be applied to the stack when a new sierra statement is reached.
     ///
@@ -32,10 +38,12 @@ pub struct CallStack {
     /// statement maps to a function call or a return statement.
     /// The stack should be modified ***after*** such a statement is executed.
     action_on_new_statement: Option<Action>,
+
+    last_hope_of_this_project: Option<(StatementIdx, Wars)>,
 }
 
 enum Action {
-    Push(Vec<(StackFrame, FunctionVariables)>),
+    Push((Vec<(StackFrame, Wars)>, StatementIdx)),
     Pop,
 }
 
@@ -44,7 +52,7 @@ impl CallStack {
         self.flat_length() + self.build_stack_frames(ctx, statement_idx).count()
     }
 
-    pub fn update(&mut self, statement_idx: StatementIdx, ctx: &Context) {
+    pub fn update(&mut self, statement_idx: StatementIdx, ctx: &Context, _vm: &VirtualMachine) {
         // We can be sure that the `statement_idx` is different from the one which was the arg when
         // `action_on_new_statement` was set.
         // The reason is that both function call and return in sierra compile to one CASM instruction each.
@@ -54,20 +62,24 @@ impl CallStack {
             Some(Action::Push(frames_and_variables)) => {
                 // TODO(#16)
                 self.call_frames_and_vars.push(frames_and_variables);
+                self.last_hope_of_this_project = None;
             }
             Some(Action::Pop) => {
-                self.call_frames_and_vars.pop();
+                let (frames, last_idx) = self.call_frames_and_vars.pop().unwrap();
+                self.last_hope_of_this_project = Some((last_idx, frames.last().unwrap().clone().1));
             }
             None => {}
         }
 
         if ctx.is_function_call_statement(statement_idx) {
-            self.action_on_new_statement = Some(Action::Push(
+            self.action_on_new_statement = Some(Action::Push((
                 self.build_stack_frames(ctx, statement_idx)
                     // TODO(#16)
-                    .zip(iter::repeat_with(|| FunctionVariables {}))
+                    // ctx.get_values_of_variables(statement_idx, vm),
+                    .zip(iter::repeat_with(Default::default))
                     .collect(),
-            ));
+                statement_idx,
+            )));
         } else if ctx.is_return_statement(statement_idx) {
             self.action_on_new_statement = Some(Action::Pop);
         }
@@ -76,7 +88,7 @@ impl CallStack {
     pub fn get_frames(&self, statement_idx: StatementIdx, ctx: &Context) -> Vec<StackFrame> {
         self.call_frames_and_vars
             .iter()
-            .flatten()
+            .flat_map(|x| &x.0)
             .map(|(frame, _)| frame)
             .cloned()
             .chain(self.build_stack_frames(ctx, statement_idx))
@@ -95,22 +107,49 @@ impl CallStack {
         vec![scope]
     }
 
+    pub fn set_variables_values(
+        &mut self,
+        statement_idx: StatementIdx,
+        ctx: &Context,
+        vm: &VirtualMachine,
+    ) {
+        let current_var_values =
+            ctx.get_values_of_variables(statement_idx, vm, &self.last_hope_of_this_project);
+        self.last_hope_of_this_project = Some((statement_idx, current_var_values));
+    }
+
     pub fn get_variables(&self, variables_reference: i64) -> Vec<Variable> {
         let flat_index = (variables_reference / 2 - 1) as usize;
-        let &FunctionVariables {} = if flat_index >= self.flat_length() {
-            // TODO(#16)
-            //  Build them on demand.
-            &FunctionVariables {}
+
+        let current_var_values = if flat_index >= self.flat_length() {
+            // Build them on demand.
+            &self.last_hope_of_this_project.as_ref().unwrap().1
         } else {
             self.call_frames_and_vars
                 .iter()
-                .flatten()
+                .flat_map(|x| &x.0)
                 .map(|(_, vars)| vars)
                 .nth(flat_index)
                 .unwrap()
         };
 
-        vec![]
+        current_var_values
+            .iter()
+            .filter_map(|(name, (loc, var_id, value_in_felts))| {
+                if value_in_felts.len() == 1 {
+                    Some((name, value_in_felts[0].to_string()))
+                } else {
+                    eprintln!("UNSUPPORTED VALUE: ({name}, {loc:?}) {var_id:?} {value_in_felts:?}");
+                    None
+                }
+            })
+            .map(|(name, value)| Variable {
+                name: name.to_string(),
+                value,
+                variables_reference: 0,
+                ..Default::default()
+            })
+            .collect()
     }
 
     /// Builds a vector of stack frames, ordered from the least nested to the most nested element.
@@ -187,9 +226,6 @@ impl CallStack {
     }
 
     fn flat_length(&self) -> usize {
-        self.call_frames_and_vars.iter().map(|frames| frames.len()).sum()
+        self.call_frames_and_vars.iter().map(|frames| frames.0.len()).sum()
     }
 }
-
-// TODO(#16)
-struct FunctionVariables {}

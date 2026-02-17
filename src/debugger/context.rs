@@ -6,15 +6,33 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as AnyhowContext, Result, anyhow};
 use cairo_annotations::annotations::TryFromDebugInfo;
 use cairo_annotations::annotations::coverage::{
-    CodeLocation, CoverageAnnotationsV1 as SierraCodeLocations,
+    CodeLocation, CoverageAnnotationsV1 as SierraCodeLocations, SourceCodeSpan,
+};
+use cairo_annotations::annotations::debugger::{
+    DebuggerAnnotationsV1 as FunctionsDebugInfo, SierraFunctionId, SierraVarId,
 };
 use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
+use cairo_lang_casm::cell_expression::CellExpression;
+use cairo_lang_casm::operand::Register;
 use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
+use cairo_lang_sierra::ids::VarId;
 use cairo_lang_sierra::program::{Program, ProgramArtifact, Statement, StatementIdx};
 use cairo_lang_sierra::program_registry::ProgramRegistry;
+use cairo_lang_sierra_to_casm::compiler::{
+    CairoProgramDebugInfo, SierraToCasmConfig, StatementKindDebugInfo,
+};
+use cairo_lang_sierra_to_casm::metadata::calc_metadata;
+use cairo_lang_sierra_to_casm::references::ReferenceExpression;
+use cairo_vm::Felt252;
+use cairo_vm::types::relocatable::MaybeRelocatable;
+use cairo_vm::vm::vm_core::VirtualMachine;
 use scarb_metadata::MetadataCommand;
+use starknet_types_core::felt::Felt;
+use tracing::trace;
+
+use crate::debugger::call_stack::Wars;
 
 #[cfg(feature = "dev")]
 mod readable_sierra_ids;
@@ -22,15 +40,19 @@ mod readable_sierra_ids;
 /// Struct that holds all the initial data needed for the debugger during execution.
 pub struct Context {
     pub root_path: PathBuf,
-    casm_debug_info: CasmDebugInfo,
     code_locations: SierraCodeLocations,
     function_names: SierraFunctionNames,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
     program: Program,
     sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
+    cairo_var_map: CairoVarMap,
+    casm_offsets: CasmDebugInfo,
     #[cfg(feature = "dev")]
     labels: HashMap<usize, String>,
 }
+
+type CairoVarMap = HashMap<StatementIdx, HashMap<CairoVar, (VarId, ReferenceExpression)>>;
+type CairoVar = (String, SourceCodeSpan);
 
 pub struct CasmDebugInfo {
     /// Sierra statement index -> start CASM bytecode offset
@@ -61,7 +83,7 @@ impl Line {
 }
 
 impl Context {
-    pub fn new(sierra_path: &Path, casm_debug_info: CasmDebugInfo) -> Result<Self> {
+    pub fn new(sierra_path: &Path, casm_offsets: CasmDebugInfo) -> Result<Self> {
         let root_path = get_project_root_path(sierra_path)?;
 
         let content = fs::read_to_string(sierra_path).expect("Failed to load sierra file");
@@ -74,9 +96,21 @@ impl Context {
         let debug_info = sierra_program
             .debug_info
             .ok_or_else(|| anyhow!("debug_info must be present in compiled sierra"))?;
+
         let code_locations = SierraCodeLocations::try_from_debug_info(&debug_info)?;
+        let files_data = build_file_locations_map(&casm_offsets, &code_locations);
+
+        let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)?;
+
+        // Temporary to get casm debug info until it is returned by USC.
+        let casm_debug_info = compile_sierra_to_get_casm_debug_info(&program)?;
+        let cairo_var_map =
+            build_cairo_var_to_casm_map(&program, &casm_debug_info, functions_debug_info);
+        eprintln!("{:#?}", cairo_var_map);
+
         let function_names = SierraFunctionNames::try_from_debug_info(&debug_info)?;
-        let files_data = build_file_locations_map(&casm_debug_info, &code_locations);
+
+        eprintln!("{}", program);
 
         Ok(Self {
             #[cfg(feature = "dev")]
@@ -85,16 +119,17 @@ impl Context {
             root_path,
             code_locations,
             function_names,
-            casm_debug_info,
             files_data,
             program,
             sierra_program_registry,
+            cairo_var_map,
+            casm_offsets,
         })
     }
 
     pub fn statement_idx_for_pc(&self, pc: usize) -> StatementIdx {
         StatementIdx(
-            self.casm_debug_info
+            self.casm_offsets
                 .statement_to_pc
                 .partition_point(|&offset| offset <= pc)
                 .saturating_sub(1),
@@ -168,6 +203,123 @@ impl Context {
 
         eprintln!("{with_labels}")
     }
+
+    pub fn get_values_of_variables(
+        &self,
+        current_statement_idx: StatementIdx,
+        vm: &VirtualMachine,
+        last_hope: &Option<(StatementIdx, Wars)>,
+    ) -> HashMap<String, (SourceCodeSpan, VarId, Vec<Felt252>)> {
+        let (last_statement_idx_in_current_function, mut current_var_values) =
+            last_hope.clone().unwrap_or_else(|| {
+                (
+                    self.program.funcs[self
+                        .program
+                        .funcs
+                        .partition_point(|x| x.entry_point.0 <= current_statement_idx.0)
+                        - 1]
+                    .entry_point,
+                    Default::default(),
+                )
+            });
+
+        for idx in last_statement_idx_in_current_function.0..=current_statement_idx.0 {
+            let Some(variables) = self.cairo_var_map.get(&StatementIdx(idx)) else { continue };
+
+            for ((name, span), (var_id, ref_expr)) in variables {
+                let cells = &ref_expr.cells;
+                let mut cells_vals = vec![];
+                for cell in cells {
+                    match cell {
+                        CellExpression::Deref(cell_ref) => {
+                            let mut relocatable = match cell_ref.register {
+                                Register::AP => vm.get_ap(),
+                                Register::FP => vm.get_fp(),
+                            };
+                            let offset_from_register = cell_ref.offset as isize;
+                            let register_offset = relocatable.offset as isize;
+                            relocatable.offset =
+                                (register_offset + offset_from_register).try_into().unwrap();
+
+                            match vm.segments.memory.get_maybe_relocatable(relocatable) {
+                                Ok(MaybeRelocatable::Int(value)) => cells_vals.push(value),
+                                Ok(MaybeRelocatable::RelocatableValue(relocatable)) => {
+                                    trace!("UNEXPECTED RELOCATABLE (MAYBE ARRAY): {relocatable:?}")
+                                }
+                                Err(_) => (),
+                            }
+                        }
+                        CellExpression::DoubleDeref(..) => {
+                            trace!("DOUBLE Ds")
+                        }
+                        CellExpression::Immediate(value) => cells_vals.push(Felt::from(value)),
+                        CellExpression::BinOp { .. } => {
+                            trace!("BINOP")
+                        }
+                    };
+                }
+
+                if let Some((curr_span, _, _)) = current_var_values.get(name) {
+                    // If there is a var with the same name in the map already,
+                    // and it is further in the code, ignore the current var.
+                    if span.start.line < curr_span.start.line
+                        || (span.start.line == curr_span.start.line
+                            && span.start.col < curr_span.start.col)
+                    {
+                        continue;
+                    }
+                }
+
+                if cells_vals.is_empty() {
+                    continue;
+                }
+
+                current_var_values.insert(name.clone(), (span.clone(), var_id.clone(), cells_vals));
+            }
+
+            // // Marks consumed vars as invalid in case of an invocation.
+            // match &self.program.statements[idx] {
+            //     Statement::Invocation(invocation) => {
+            //         match self.sierra_program_registry.get_libfunc(&invocation.libfunc_id).unwrap()
+            //         {
+            //             // Ignore `drop` since it does not consume the var at Cairo level.
+            //             CoreConcreteLibfunc::Drop(_) => {}
+            //             _ => {
+            //                 let dummy = Vec::new();
+            //                 let vars_to_preserve = if let [
+            //                     GenBranchInfo { target: GenBranchTarget::Fallthrough, results },
+            //                 ] = invocation.branches.as_slice()
+            //                 {
+            //                     results
+            //                 } else {
+            //                     &dummy
+            //                 };
+            //
+            //                 for var_id in
+            //                     invocation.args.iter().filter(|var| !vars_to_preserve.contains(var))
+            //                 {
+            //                     if let Some(name_to_remove) = current_var_values
+            //                         .iter()
+            //                         .find(|(_, (_, id, _))| id.id == var_id.id)
+            //                         .map(|(name, _)| name.clone())
+            //                     {
+            //                         current_var_values.remove(&name_to_remove);
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            //     Statement::Return(_) => {}
+            // }
+        }
+
+        #[cfg(feature = "dev")]
+        self.print_statement(current_statement_idx);
+        // eprintln!("{current_statement_idx:?}: {current_var_values:#?}");
+        eprintln!();
+
+        current_var_values
+    }
 }
 
 fn build_file_locations_map(
@@ -219,6 +371,68 @@ fn build_file_locations_map(
     }
 
     file_map
+}
+
+fn build_cairo_var_to_casm_map(
+    program: &Program,
+    cairo_program_debug_info: &CairoProgramDebugInfo,
+    functions_debug_info: FunctionsDebugInfo,
+) -> CairoVarMap {
+    let mut cairo_var_to_ref_expr = HashMap::new();
+    for (idx, statement_debug_info) in
+        cairo_program_debug_info.sierra_statement_info.iter().enumerate()
+    {
+        let (casm_ref_expressions_for_vars, vars) =
+            match (&program.statements[idx], &statement_debug_info.additional_kind_info) {
+                (
+                    Statement::Invocation(invocation),
+                    StatementKindDebugInfo::Invoke(invocation_debug),
+                ) => {
+                    let casm_ref_expressions_for_vars: Vec<_> =
+                        invocation_debug.ref_values.iter().cloned().map(|x| x.expression).collect();
+                    (casm_ref_expressions_for_vars, invocation.args.clone())
+                }
+                (Statement::Return(vars), StatementKindDebugInfo::Return(return_debug)) => {
+                    let casm_ref_expressions_for_vars: Vec<_> =
+                        return_debug.ref_values.iter().cloned().map(|x| x.expression).collect();
+                    (casm_ref_expressions_for_vars, vars.clone())
+                }
+                _ => unreachable!(),
+            };
+
+        assert_eq!(casm_ref_expressions_for_vars.len(), vars.len());
+        let function_id =
+            &program.funcs[program.funcs.partition_point(|x| x.entry_point.0 <= idx) - 1].id;
+        let func_debug_info =
+            &functions_debug_info.functions_info[&SierraFunctionId(function_id.id)];
+
+        for (casm_expressions, var_id) in casm_ref_expressions_for_vars.iter().zip(vars.clone()) {
+            let Some((name, span)) =
+                func_debug_info.sierra_to_cairo_variable.get(&SierraVarId(var_id.id))
+            else {
+                continue;
+            };
+            cairo_var_to_ref_expr
+                .entry(StatementIdx(idx))
+                .or_insert_with(HashMap::new)
+                .insert((name.clone(), span.clone()), (var_id, casm_expressions.clone()));
+        }
+    }
+
+    cairo_var_to_ref_expr
+}
+
+fn compile_sierra_to_get_casm_debug_info(program: &Program) -> Result<CairoProgramDebugInfo> {
+    let metadata = calc_metadata(program, Default::default())
+        .with_context(|| "Failed calculating metadata.")?;
+    let cairo_program = cairo_lang_sierra_to_casm::compiler::compile(
+        program,
+        &metadata,
+        SierraToCasmConfig { gas_usage_check: true, max_bytecode_size: usize::MAX },
+    )
+    .with_context(|| "Compilation failed.")?;
+
+    Ok(cairo_program.debug_info)
 }
 
 // TODO(#50)
