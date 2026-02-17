@@ -32,6 +32,8 @@ use scarb_metadata::MetadataCommand;
 use starknet_types_core::felt::Felt;
 use tracing::trace;
 
+use crate::debugger::call_stack::Wars;
+
 #[cfg(feature = "dev")]
 mod readable_sierra_ids;
 
@@ -206,24 +208,22 @@ impl Context {
         &self,
         current_statement_idx: StatementIdx,
         vm: &VirtualMachine,
-    ) -> HashMap<String, String> {
-        // TODO: Use previous idx from THIS function to determine what statements need to be checked.
-        //  Maybe store it in the call stack?
-        //  For now we always analyze the function from the beginning to current statement.
+        last_hope: &Option<(StatementIdx, Wars)>,
+    ) -> HashMap<String, (SourceCodeSpan, VarId, Vec<Felt252>)> {
+        let (last_statement_idx_in_current_function, mut current_var_values) =
+            last_hope.clone().unwrap_or_else(|| {
+                (
+                    self.program.funcs[self
+                        .program
+                        .funcs
+                        .partition_point(|x| x.entry_point.0 <= current_statement_idx.0)
+                        - 1]
+                    .entry_point,
+                    Default::default(),
+                )
+            });
 
-        // TODO: The approach described above may be tricky for recursive functions (e.g. loops).
-        //  Check the length of a stack in such case.
-        let function_entrypoint = &self.program.funcs[self
-            .program
-            .funcs
-            .partition_point(|x| x.entry_point.0 <= current_statement_idx.0)
-            - 1]
-        .entry_point;
-
-        let mut current_var_values: HashMap<String, (SourceCodeSpan, VarId, Vec<Felt252>)> =
-            HashMap::new();
-
-        for idx in function_entrypoint.0..=current_statement_idx.0 {
+        for idx in last_statement_idx_in_current_function.0..=current_statement_idx.0 {
             let Some(variables) = self.cairo_var_map.get(&StatementIdx(idx)) else { continue };
 
             for ((name, span), (var_id, ref_expr)) in variables {
@@ -319,16 +319,6 @@ impl Context {
         eprintln!();
 
         current_var_values
-            .into_iter()
-            .filter_map(|(name, (loc, var_id, value_in_felts))| {
-                if value_in_felts.len() == 1 {
-                    Some((name, value_in_felts[0].to_string()))
-                } else {
-                    eprintln!("UNSUPPORTED VALUE: ({name}, {loc:?}) {var_id:?} {value_in_felts:?}");
-                    None
-                }
-            })
-            .collect()
     }
 }
 

@@ -49,7 +49,7 @@ impl CairoDebugger {
         while !self.state.is_configuration_done() {
             // TODO(#35)
             let request = self.connection.next_request()?;
-            self.process_request(request, None)?;
+            self.process_request(request)?;
         }
 
         Ok(())
@@ -58,31 +58,31 @@ impl CairoDebugger {
     fn sync_with_vm(&mut self, vm: &VirtualMachine) -> Result<()> {
         self.state.update_state(vm, &self.ctx);
 
-        self.maybe_handle_breakpoint_hit(vm)?;
-        self.maybe_handle_step_action(vm)?;
+        self.maybe_handle_breakpoint_hit()?;
+        self.maybe_handle_step_action()?;
 
         while let Some(request) = self.connection.try_next_request()? {
-            self.process_request(request, Some(vm))?;
+            self.process_request(request)?;
 
             if self.state.is_execution_stopped() {
-                self.process_until_resume(vm)?;
+                self.process_until_resume()?;
             }
         }
 
         Ok(())
     }
 
-    fn process_until_resume(&mut self, vm: &VirtualMachine) -> Result<()> {
+    fn process_until_resume(&mut self) -> Result<()> {
         while self.state.is_execution_stopped() {
             let request = self.connection.next_request()?;
-            self.process_request(request, Some(vm))?;
+            self.process_request(request)?;
         }
 
         Ok(())
     }
 
-    fn process_request(&mut self, request: Request, vm: Option<&VirtualMachine>) -> Result<()> {
-        let response = handler::handle_request(&request, &mut self.state, &self.ctx, vm)?;
+    fn process_request(&mut self, request: Request) -> Result<()> {
+        let response = handler::handle_request(&request, &mut self.state, &self.ctx)?;
         let disconnected = matches!(response.response_body, ResponseBody::Disconnect);
 
         if let Some(event) = response.event {
@@ -98,7 +98,7 @@ impl CairoDebugger {
         Ok(())
     }
 
-    fn maybe_handle_step_action(&mut self, vm: &VirtualMachine) -> Result<()> {
+    fn maybe_handle_step_action(&mut self) -> Result<()> {
         let current_line =
             Line::create_from_statement_idx(self.state.current_statement_idx, &self.ctx);
 
@@ -122,25 +122,21 @@ impl CairoDebugger {
 
         if stop {
             self.state.step_action = None;
-            self.pause_and_process_requests(StoppedEventReason::Step, vm)?;
+            self.pause_and_process_requests(StoppedEventReason::Step)?;
         }
 
         Ok(())
     }
 
-    fn maybe_handle_breakpoint_hit(&mut self, vm: &VirtualMachine) -> Result<()> {
+    fn maybe_handle_breakpoint_hit(&mut self) -> Result<()> {
         if self.state.was_breakpoint_hit(&self.ctx) {
-            self.pause_and_process_requests(StoppedEventReason::Breakpoint, vm)?;
+            self.pause_and_process_requests(StoppedEventReason::Breakpoint)?;
         }
 
         Ok(())
     }
 
-    fn pause_and_process_requests(
-        &mut self,
-        reason: StoppedEventReason,
-        vm: &VirtualMachine,
-    ) -> Result<()> {
+    fn pause_and_process_requests(&mut self, reason: StoppedEventReason) -> Result<()> {
         self.state.stop_execution();
         self.connection.send_event(Event::Stopped(StoppedEventBody {
             reason,
@@ -153,7 +149,7 @@ impl CairoDebugger {
             preserve_focus_hint: None,
             text: None,
         }))?;
-        self.process_until_resume(vm)
+        self.process_until_resume()
     }
 }
 

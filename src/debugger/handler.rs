@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow, bail};
-use cairo_vm::vm::vm_core::VirtualMachine;
 use dap::events::{Event, StoppedEventBody};
 use dap::prelude::{Command, Request, ResponseBody};
 use dap::requests::{NextArguments, StepInArguments};
@@ -44,7 +43,6 @@ pub fn handle_request(
     request: &Request,
     state: &mut State,
     ctx: &Context,
-    vm: Option<&VirtualMachine>,
 ) -> Result<HandlerResponse> {
     match &request.command {
         // We have not yet decided if we want to support these.
@@ -174,12 +172,7 @@ pub fn handle_request(
             Ok(ResponseBody::Scopes(ScopesResponse { scopes }).into())
         }
         Command::Variables(VariablesArguments { variables_reference, .. }) => {
-            let variables = state.call_stack.get_variables(
-                *variables_reference,
-                state.current_statement_idx,
-                ctx,
-                vm.unwrap(),
-            );
+            let variables = state.call_stack.get_variables(*variables_reference);
             Ok(ResponseBody::Variables(VariablesResponse { variables }).into())
         }
 

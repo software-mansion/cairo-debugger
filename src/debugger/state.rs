@@ -48,6 +48,7 @@ impl State {
 
         self.current_statement_idx = ctx.statement_idx_for_pc(current_pc.offset);
         self.call_stack.update(self.current_statement_idx, ctx, vm);
+        self.call_stack.set_variables_values(self.current_statement_idx, ctx, vm);
     }
 
     pub fn is_configuration_done(&self) -> bool {
