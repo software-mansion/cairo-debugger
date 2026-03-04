@@ -13,7 +13,6 @@ use crate::debugger::context::{CasmDebugInfo, Context, Line};
 use crate::debugger::handler::StepAction;
 use crate::debugger::state::State;
 
-mod call_stack;
 pub mod context;
 mod handler;
 mod state;
