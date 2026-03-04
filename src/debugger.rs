@@ -10,7 +10,6 @@ use tracing::error;
 
 use crate::connection::Connection;
 use crate::debugger::context::{CasmDebugInfo, Context, Line};
-use crate::debugger::handler::StepAction;
 use crate::debugger::state::State;
 
 pub mod context;
@@ -101,25 +100,9 @@ impl CairoDebugger {
         let current_line =
             Line::create_from_statement_idx(self.state.current_statement_idx, &self.ctx);
 
-        let stop = match &self.state.step_action {
-            Some(StepAction::StepIn { prev_line }) if *prev_line != current_line => true,
-            Some(StepAction::Next { prev_line, depth })
-                if *depth
-                    >= self.state.call_stack.depth(self.state.current_statement_idx, &self.ctx)
-                    && *prev_line != current_line =>
-            {
-                true
-            }
-            Some(StepAction::StepOut { depth })
-                if *depth
-                    > self.state.call_stack.depth(self.state.current_statement_idx, &self.ctx) =>
-            {
-                true
-            }
-            _ => false,
-        };
+        let step_action_happened = self.state.has_step_action_happened(current_line, &self.ctx);
 
-        if stop {
+        if step_action_happened {
             self.state.step_action = None;
             self.pause_and_process_requests(StoppedEventReason::Step)?;
         }
