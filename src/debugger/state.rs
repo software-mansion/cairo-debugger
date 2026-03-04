@@ -5,14 +5,17 @@ use std::path::Path;
 use cairo_annotations::annotations::coverage::CodeLocation;
 use cairo_lang_sierra::program::StatementIdx;
 use cairo_vm::vm::vm_core::VirtualMachine;
-use dap::types::StackFrame;
 use tracing::{debug, trace};
 
-use crate::debugger::call_stack::CallStack;
 use crate::debugger::context::{Context, Line};
 use crate::debugger::handler::StepAction;
+use crate::debugger::state::call_stack::CallStack;
+use crate::debugger::state::ui_state::UiState;
 
 type SourcePath = String;
+
+mod call_stack;
+mod ui_state;
 
 pub struct State {
     configuration_done: bool,
@@ -131,18 +134,4 @@ struct BreakpointHit {
     location: CodeLocation,
     /// State of the UI at the time when the breakpoint was hit.
     ui_state: UiState,
-}
-
-/// Represents the state of the debugger from the user's point of view.
-/// E.g. `stack_trace` is visible to a user through [`dap::prelude::Command::StackTrace`] request.
-#[derive(PartialEq)]
-struct UiState {
-    stack_trace: Vec<StackFrame>,
-}
-
-impl UiState {
-    fn build(state: &State, ctx: &Context) -> Self {
-        let stack_trace = state.call_stack.get_frames(state.current_statement_idx, ctx);
-        UiState { stack_trace }
-    }
 }
