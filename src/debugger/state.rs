@@ -127,6 +127,24 @@ impl State {
         self.last_breakpoint_hit = breakpoint_hit;
         true
     }
+
+    pub fn has_step_action_happened(&self, current_line: Line, ctx: &Context) -> bool {
+        match &self.step_action {
+            Some(StepAction::StepIn { prev_line }) if *prev_line != current_line => true,
+            Some(StepAction::Next { prev_line, depth })
+                if *depth >= self.call_stack.depth(self.current_statement_idx, ctx)
+                    && *prev_line != current_line =>
+            {
+                true
+            }
+            Some(StepAction::StepOut { depth })
+                if *depth > self.call_stack.depth(self.current_statement_idx, ctx) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(PartialEq)]
