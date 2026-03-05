@@ -51,7 +51,7 @@ impl State {
         }
 
         self.current_statement_idx = ctx.statement_idx_for_pc(current_pc.offset);
-        self.call_stack.update(self.current_statement_idx, ctx);
+        self.call_stack.update_pre_step(self.current_statement_idx, ctx);
     }
 
     pub fn is_configuration_done(&self) -> bool {

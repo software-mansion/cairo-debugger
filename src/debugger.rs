@@ -53,7 +53,7 @@ impl CairoDebugger {
         Ok(())
     }
 
-    fn sync_with_vm(&mut self, vm: &VirtualMachine) -> Result<()> {
+    fn sync_with_vm_pre_step(&mut self, vm: &VirtualMachine) -> Result<()> {
         self.state.update_state(vm, &self.ctx);
 
         self.maybe_handle_breakpoint_hit()?;
@@ -68,6 +68,10 @@ impl CairoDebugger {
         }
 
         Ok(())
+    }
+
+    fn sync_with_vm_post_step(&mut self) {
+        self.state.call_stack.update_post_step();
     }
 
     fn process_until_resume(&mut self) -> Result<()> {

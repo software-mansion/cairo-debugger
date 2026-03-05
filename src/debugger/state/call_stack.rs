@@ -54,9 +54,9 @@ impl CallStack {
         self.flat_length() + self.build_stack_frames(ctx, statement_idx).count()
     }
 
-    pub fn update(&mut self, statement_idx: StatementIdx, ctx: &Context) {
-        // We can be sure that the `statement_idx` is different from the one which was the arg when
-        // `action_on_new_statement` was set.
+    pub fn update_post_step(&mut self) {
+        // We can be sure that the next `statement_idx` is different from the one which was the arg
+        // when `action_on_new_statement` was set.
         // The reason is that both function call and return in sierra compile to one CASM instruction each.
         // https://github.com/starkware-libs/cairo/blob/20eca60c88a35f7da13f573b2fc68818506703a9/crates/cairo-lang-sierra-to-casm/src/invocations/function_call.rs#L46
         // https://github.com/starkware-libs/cairo/blob/d52acf845fc234f1746f814de7c64b535563d479/crates/cairo-lang-sierra-to-casm/src/compiler.rs#L533
@@ -70,7 +70,9 @@ impl CallStack {
             }
             None => {}
         }
+    }
 
+    pub fn update_pre_step(&mut self, statement_idx: StatementIdx, ctx: &Context) {
         if ctx.is_function_call_statement(statement_idx) {
             self.action_on_new_statement = Some(Action::Push(
                 self.build_stack_frames(ctx, statement_idx)
