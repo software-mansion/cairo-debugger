@@ -9,7 +9,7 @@ use dap::types::StoppedEventReason;
 use tracing::error;
 
 use crate::connection::Connection;
-use crate::debugger::context::{CasmDebugInfo, Context, Line};
+use crate::debugger::context::{Context, Line};
 use crate::debugger::state::State;
 
 pub mod context;
@@ -30,12 +30,9 @@ pub struct CairoDebugger {
 }
 
 impl CairoDebugger {
-    pub fn connect_and_initialize(
-        sierra_path: &Path,
-        casm_debug_info: CasmDebugInfo,
-    ) -> Result<Self> {
+    pub fn connect_and_initialize(sierra_path: &Path) -> Result<Self> {
         let connection = Connection::new()?;
-        let ctx = Context::new(sierra_path, casm_debug_info)?;
+        let ctx = Context::new(sierra_path)?;
 
         let mut debugger = Self { connection, ctx, state: State::new() };
         debugger.initialize()?;

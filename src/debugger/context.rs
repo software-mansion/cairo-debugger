@@ -8,33 +8,41 @@ use cairo_annotations::annotations::TryFromDebugInfo;
 use cairo_annotations::annotations::coverage::{
     CodeLocation, CoverageAnnotationsV1 as SierraCodeLocations,
 };
+use cairo_annotations::annotations::debugger::DebuggerAnnotationsV1 as FunctionsDebugInfo;
 use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
 use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
-use cairo_lang_sierra::program::{Program, ProgramArtifact, Statement, StatementIdx};
+use cairo_lang_sierra::program::{Function, Program, ProgramArtifact, Statement, StatementIdx};
 use cairo_lang_sierra::program_registry::ProgramRegistry;
+use cairo_lang_sierra_to_casm::compiler::{CairoProgramDebugInfo, SierraToCasmConfig};
+use cairo_lang_sierra_to_casm::metadata::calc_metadata;
 use scarb_metadata::MetadataCommand;
+
+use crate::debugger::context::variables::{CairoVarsInStatement, build_cairo_var_to_casm_map};
 
 #[cfg(feature = "dev")]
 mod readable_sierra_ids;
+mod variables;
 
 /// Struct that holds all the initial data needed for the debugger during execution.
 pub struct Context {
     pub root_path: PathBuf,
-    casm_debug_info: CasmDebugInfo,
+    statements_start_offsets: StatementsStartOffsets,
     code_locations: SierraCodeLocations,
     function_names: SierraFunctionNames,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
     program: Program,
     sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
+    #[expect(dead_code)]
+    cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
     #[cfg(feature = "dev")]
     labels: HashMap<usize, String>,
 }
 
-pub struct CasmDebugInfo {
-    /// Sierra statement index -> start CASM bytecode offset
-    pub statement_to_pc: Vec<usize>,
+struct StatementsStartOffsets {
+    /// Sierra statement index -> start CASM bytecode offset.
+    statement_to_pc: Vec<usize>,
 }
 
 /// A map that stores a vector of ***hittable*** Sierra statement indexes for each line in a file.
@@ -61,22 +69,30 @@ impl Line {
 }
 
 impl Context {
-    pub fn new(sierra_path: &Path, casm_debug_info: CasmDebugInfo) -> Result<Self> {
+    pub fn new(sierra_path: &Path) -> Result<Self> {
         let root_path = get_project_root_path(sierra_path)?;
-
         let content = fs::read_to_string(sierra_path).expect("Failed to load sierra file");
+
         let sierra_program: ProgramArtifact = serde_json::from_str(&content)?;
         let program = sierra_program.program;
-
         let sierra_program_registry =
             ProgramRegistry::new(&program).expect("creating program registry failed");
 
         let debug_info = sierra_program
             .debug_info
             .ok_or_else(|| anyhow!("debug_info must be present in compiled sierra"))?;
+
         let code_locations = SierraCodeLocations::try_from_debug_info(&debug_info)?;
+        let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)?;
         let function_names = SierraFunctionNames::try_from_debug_info(&debug_info)?;
-        let files_data = build_file_locations_map(&casm_debug_info, &code_locations);
+
+        // TODO(#61)
+        let casm_debug_info = compile_sierra_to_get_casm_debug_info(&program)?;
+        let cairo_var_map =
+            build_cairo_var_to_casm_map(&program, &casm_debug_info, functions_debug_info);
+        let statements_start_offsets = extract_statements_start_offsets(&casm_debug_info);
+
+        let files_data = build_file_locations_map(&statements_start_offsets, &code_locations);
 
         Ok(Self {
             #[cfg(feature = "dev")]
@@ -85,16 +101,17 @@ impl Context {
             root_path,
             code_locations,
             function_names,
-            casm_debug_info,
+            statements_start_offsets,
             files_data,
             program,
             sierra_program_registry,
+            cairo_var_map,
         })
     }
 
     pub fn statement_idx_for_pc(&self, pc: usize) -> StatementIdx {
         StatementIdx(
-            self.casm_debug_info
+            self.statements_start_offsets
                 .statement_to_pc
                 .partition_point(|&offset| offset <= pc)
                 .saturating_sub(1),
@@ -170,16 +187,30 @@ impl Context {
     }
 }
 
+fn sierra_function_for_statement(statement_idx: usize, program: &Program) -> &Function {
+    &program.funcs[program.funcs.partition_point(|x| x.entry_point.0 <= statement_idx) - 1]
+}
+
+fn extract_statements_start_offsets(
+    casm_debug_info: &CairoProgramDebugInfo,
+) -> StatementsStartOffsets {
+    let statement_to_pc =
+        casm_debug_info.sierra_statement_info.iter().map(|x| x.start_offset).collect();
+
+    StatementsStartOffsets { statement_to_pc }
+}
+
 fn build_file_locations_map(
-    casm_debug_info: &CasmDebugInfo,
+    statements_start_offsets: &StatementsStartOffsets,
     code_location_annotations: &SierraCodeLocations,
 ) -> HashMap<PathBuf, FileCodeLocationsData> {
     let mut file_map: HashMap<_, FileCodeLocationsData> = HashMap::new();
 
     let hittable_statements_code_locations =
         code_location_annotations.statements_code_locations.iter().filter(|(statement_idx, _)| {
-            let statement_offset = casm_debug_info.statement_to_pc[statement_idx.0];
-            let next_statement_offset = casm_debug_info.statement_to_pc.get(statement_idx.0 + 1);
+            let statement_offset = statements_start_offsets.statement_to_pc[statement_idx.0];
+            let next_statement_offset =
+                statements_start_offsets.statement_to_pc.get(statement_idx.0 + 1);
 
             // If the next sierra statement maps to the same pc, it means the compilation of the
             // current statement did not produce any CASM instructions.
@@ -219,6 +250,19 @@ fn build_file_locations_map(
     }
 
     file_map
+}
+
+fn compile_sierra_to_get_casm_debug_info(program: &Program) -> Result<CairoProgramDebugInfo> {
+    let metadata = calc_metadata(program, Default::default())
+        .with_context(|| "Failed calculating metadata.")?;
+    let cairo_program = cairo_lang_sierra_to_casm::compiler::compile(
+        program,
+        &metadata,
+        SierraToCasmConfig { gas_usage_check: true, max_bytecode_size: usize::MAX },
+    )
+    .with_context(|| "Compilation failed.")?;
+
+    Ok(cairo_program.debug_info)
 }
 
 // TODO(#50)
