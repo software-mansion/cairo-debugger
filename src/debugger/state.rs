@@ -57,7 +57,7 @@ impl State {
             && idx != self.current_statement_idx
         {
             self.current_statement_idx = idx;
-            self.call_stack.update_pre_step(self.current_statement_idx, ctx);
+            self.call_stack.update_pre_step(self.current_statement_idx, ctx, vm);
 
             ControlFlow::Continue(())
         } else {
