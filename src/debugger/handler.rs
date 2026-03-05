@@ -12,7 +12,7 @@ use tracing::{error, trace};
 
 use crate::debugger::MAX_OBJECT_REFERENCE;
 use crate::debugger::context::{Context, Line};
-use crate::debugger::state::State;
+use crate::debugger::state::{RequestedVariables, State};
 
 pub struct HandlerResponse {
     pub response_body: ResponseBody,
@@ -172,7 +172,9 @@ pub fn handle_request(
             Ok(ResponseBody::Scopes(ScopesResponse { scopes }).into())
         }
         Command::Variables(VariablesArguments { variables_reference, .. }) => {
-            let variables = state.call_stack.get_variables(*variables_reference);
+            let variables = state
+                .call_stack
+                .get_variables(RequestedVariables::VariablesReference(*variables_reference));
             Ok(ResponseBody::Variables(VariablesResponse { variables }).into())
         }
 

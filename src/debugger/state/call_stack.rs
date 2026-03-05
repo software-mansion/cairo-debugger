@@ -30,7 +30,7 @@ pub struct CallStack {
     ///
     /// [Object references](https://microsoft.github.io/debug-adapter-protocol/overview#lifetime-of-objects-references):
     /// object reference for each stack frame is equal to its `1 + 2 * flat_index`
-    /// where `flat_index` is its position in the flattened vector (vector of tuples).
+    /// where `flat_index` is its position (0-indexed) in the flattened vector (vector of tuples).
     /// For the variables' scope, the object reference is equal to `2 + 2 * flat_index`.
     call_frames_and_vars: Vec<SubStack>,
 
@@ -107,8 +107,14 @@ impl CallStack {
         vec![scope]
     }
 
-    pub fn get_variables(&self, variables_reference: i64) -> Vec<Variable> {
-        let flat_index = (variables_reference / 2 - 1) as usize;
+    pub fn get_variables(&self, requested_variables: RequestedVariables) -> Vec<Variable> {
+        let flat_index = match requested_variables {
+            RequestedVariables::CurrentFunction => self.flat_length(),
+            RequestedVariables::VariablesReference(variables_reference) => {
+                (variables_reference / 2 - 1) as usize
+            }
+        };
+
         let &FunctionVariables {} = if flat_index >= self.flat_length() {
             // TODO(#16)
             //  Build them on demand.
@@ -205,3 +211,8 @@ impl CallStack {
 
 // TODO(#16)
 struct FunctionVariables {}
+
+pub enum RequestedVariables {
+    CurrentFunction,
+    VariablesReference(i64),
+}

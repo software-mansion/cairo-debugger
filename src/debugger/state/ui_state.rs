@@ -1,18 +1,22 @@
-use dap::types::StackFrame;
+use dap::types::{StackFrame, Variable};
 
 use crate::debugger::context::Context;
 use crate::debugger::state::State;
+use crate::debugger::state::call_stack::RequestedVariables;
 
 /// Represents the state of the debugger from the user's point of view.
 /// E.g. `stack_trace` is visible to a user through [`dap::prelude::Command::StackTrace`] request.
 #[derive(PartialEq)]
 pub struct UiState {
     stack_trace: Vec<StackFrame>,
+    values_of_variables: Vec<Variable>,
 }
 
 impl UiState {
     pub fn build(state: &State, ctx: &Context) -> Self {
         let stack_trace = state.call_stack.get_frames(state.current_statement_idx, ctx);
-        UiState { stack_trace }
+        let values_of_variables =
+            state.call_stack.get_variables(RequestedVariables::CurrentFunction);
+        UiState { stack_trace, values_of_variables }
     }
 }

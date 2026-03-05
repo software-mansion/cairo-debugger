@@ -500,7 +500,7 @@ dependencies = [
 [[package]]
 name = "dap"
 version = "0.4.1-alpha1"
-source = "git+https://github.com/software-mansion-labs/dap-rs?rev=d26a3005fc37bb5127734dbfb0d8cadb6d5ca14b#d26a3005fc37bb5127734dbfb0d8cadb6d5ca14b"
+source = "git+https://github.com/software-mansion-labs/dap-rs?rev=27542c413184732cd8cb5632c8349d605ed4fe04#27542c413184732cd8cb5632c8349d605ed4fe04"
 dependencies = [
  "serde",
  "serde_json",
