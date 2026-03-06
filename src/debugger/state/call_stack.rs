@@ -1,10 +1,11 @@
-use std::collections::HashMap;
 use std::iter;
 use std::path::Path;
 
 use cairo_annotations::annotations::coverage::{CodeLocation, SourceFileFullPath};
 use cairo_annotations::annotations::profiler::FunctionName;
+use cairo_lang_casm::operand::{CellRef, Register};
 use cairo_lang_sierra::program::{BranchTarget, GenBranchTarget, StatementIdx};
+use cairo_vm::types::relocatable::Relocatable;
 use cairo_vm::vm::vm_core::VirtualMachine;
 use dap::types::{Scope, ScopePresentationhint, StackFrame, Variable};
 use dap::types::{Source, StackFramePresentationhint};
@@ -100,8 +101,13 @@ impl CallStack {
         if ctx.is_function_call_statement(statement_idx) {
             let frames: Vec<_> = self.build_stack_frames(ctx, statement_idx).collect();
             // TODO(#95): handle variables of inlined functions.
-            let vars = iter::repeat_n(FunctionVariables::default(), frames.len() - 1)
-                .chain(iter::once(get_values_of_variables()));
+            let vars = iter::repeat_n(FunctionVariables::default(), frames.len() - 1).chain(
+                iter::once(get_values_of_variables(
+                    ctx,
+                    vm,
+                    &self.current_sierra_function_context.post_statements_registers,
+                )),
+            );
 
             let frames_and_vars = frames.into_iter().zip(vars).collect();
 
@@ -133,7 +139,12 @@ impl CallStack {
         vec![scope]
     }
 
-    pub fn get_variables(&self, requested_variables: RequestedVariables) -> Vec<Variable> {
+    pub fn get_variables(
+        &self,
+        requested_variables: RequestedVariables,
+        ctx: &Context,
+        vm: &VirtualMachine,
+    ) -> Vec<Variable> {
         let flat_index = match requested_variables {
             RequestedVariables::CurrentFunction => self.flat_length(),
             RequestedVariables::VariablesReference(variables_reference) => {
@@ -142,7 +153,11 @@ impl CallStack {
         };
 
         let FunctionVariables { names_to_values } = if flat_index >= self.flat_length() {
-            get_values_of_variables()
+            get_values_of_variables(
+                ctx,
+                vm,
+                &self.current_sierra_function_context.post_statements_registers,
+            )
         } else {
             self.call_frames_and_vars
                 .iter()
@@ -348,7 +363,7 @@ enum Action {
 
 #[derive(Default, Clone)]
 struct FunctionVariables {
-    names_to_values: HashMap<String, String>,
+    names_to_values: IndexMap<String, String>,
 }
 
 pub enum RequestedVariables {
@@ -356,10 +371,22 @@ pub enum RequestedVariables {
     VariablesReference(i64),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RegistersValues {
-    #[expect(dead_code)]
     ap: usize,
-    #[expect(dead_code)]
     fp: usize,
+}
+
+impl RegistersValues {
+    pub fn relocatable_from_cell_ref(&self, cell_ref: &CellRef) -> Relocatable {
+        let original_offset = match cell_ref.register {
+            Register::AP => self.ap,
+            Register::FP => self.fp,
+        };
+        let offset = (original_offset as isize + cell_ref.offset as isize).try_into().unwrap();
+
+        // Segment index is always one for ap and fp.
+        // https://web.archive.org/web/20240228050216/http://docs.cairo-lang.org/how_cairo_works/segments.html
+        Relocatable { segment_index: 1, offset }
+    }
 }

@@ -14,30 +14,28 @@ use crate::debugger::context::sierra_function_for_statement;
 pub struct CairoVarsInStatement {
     #[expect(dead_code)]
     /// Variables consumed by the sierra statement.
-    consumed: HashMap<CairoVarId, CairoVarReference>,
+    pub consumed: HashMap<CairoVarId, CairoVarReference>,
 
-    #[expect(dead_code)]
     /// Variables produced when entering branches of the sierra statement.
-    produced: HashMap<GenBranchTargetHashable, HashMap<CairoVarId, CairoVarReference>>,
+    pub produced: HashMap<GenBranchTargetHashable, HashMap<CairoVarId, CairoVarReference>>,
 }
 
 /// Unique identifier of a Cairo variable.
 #[derive(Debug, Hash, PartialEq, Eq)]
-struct CairoVarId {
-    name: String,
-    definition_span: SourceCodeSpan,
+pub struct CairoVarId {
+    pub name: String,
+    pub definition_span: SourceCodeSpan,
 }
 
 /// Sierra and CASM references to a Cairo variable.
 #[derive(Debug)]
-struct CairoVarReference {
-    sierra_id: VarId,
-    #[expect(dead_code)]
-    ref_expr: ReferenceExpression,
+pub struct CairoVarReference {
+    pub sierra_id: VarId,
+    pub ref_expr: ReferenceExpression,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum GenBranchTargetHashable {
+pub enum GenBranchTargetHashable {
     /// Continues the run to the next statement.
     Fallthrough,
     /// Continues the run to the provided statement.
