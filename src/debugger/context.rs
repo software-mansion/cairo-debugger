@@ -31,16 +31,20 @@ pub use file_locations::Line;
 /// Struct that holds all the initial data needed for the debugger during execution.
 pub struct Context {
     pub root_path: PathBuf,
+    sierra_context: SierraContext,
     statements_start_offsets: StatementsStartOffsets,
-    code_locations: SierraCodeLocations,
-    function_names: SierraFunctionNames,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
-    program: Program,
-    sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
     #[expect(dead_code)]
     cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
     #[cfg(feature = "dev")]
     labels: HashMap<usize, String>,
+}
+
+struct SierraContext {
+    program: Program,
+    sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
+    code_locations: SierraCodeLocations,
+    function_names: SierraFunctionNames,
 }
 
 struct StatementsStartOffsets {
@@ -74,17 +78,20 @@ impl Context {
 
         let files_data = build_file_locations_map(&statements_start_offsets, &code_locations);
 
+        #[cfg(feature = "dev")]
+        let labels = readable_sierra_ids::extract_labels(&program);
+
+        let sierra_context =
+            SierraContext { program, sierra_program_registry, code_locations, function_names };
+
         Ok(Self {
             #[cfg(feature = "dev")]
-            labels: readable_sierra_ids::extract_labels(&program),
+            labels,
 
             root_path,
-            code_locations,
-            function_names,
+            sierra_context,
             statements_start_offsets,
             files_data,
-            program,
-            sierra_program_registry,
             cairo_var_map,
         })
     }
@@ -103,7 +110,8 @@ impl Context {
         &self,
         statement_idx: StatementIdx,
     ) -> Option<CodeLocation> {
-        self.code_locations
+        self.sierra_context
+            .code_locations
             .statements_code_locations
             .get(&statement_idx)
             .and_then(|locations| locations.first().cloned())
@@ -115,7 +123,7 @@ impl Context {
         &self,
         statement_idx: StatementIdx,
     ) -> Option<&Vec<CodeLocation>> {
-        self.code_locations.statements_code_locations.get(&statement_idx)
+        self.sierra_context.code_locations.statements_code_locations.get(&statement_idx)
     }
 
     /// Return function names for the current statement, including inlined function names.
@@ -124,7 +132,7 @@ impl Context {
         &self,
         statement_idx: StatementIdx,
     ) -> Option<&Vec<FunctionName>> {
-        self.function_names.statements_functions.get(&statement_idx)
+        self.sierra_context.function_names.statements_functions.get(&statement_idx)
     }
 
     pub fn statement_idxs_for_breakpoint(
@@ -143,7 +151,7 @@ impl Context {
         match self.statement_idx_to_statement(statement_idx) {
             Statement::Invocation(invocation) => {
                 matches!(
-                    self.sierra_program_registry.get_libfunc(&invocation.libfunc_id),
+                    self.sierra_context.sierra_program_registry.get_libfunc(&invocation.libfunc_id),
                     Ok(CoreConcreteLibfunc::FunctionCall(_))
                 )
             }
@@ -152,7 +160,7 @@ impl Context {
     }
 
     fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
-        &self.program.statements[statement_idx.0]
+        &self.sierra_context.program.statements[statement_idx.0]
     }
 
     #[cfg(feature = "dev")]
