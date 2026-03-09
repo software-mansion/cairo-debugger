@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
@@ -51,7 +52,9 @@ impl CairoDebugger {
     }
 
     fn sync_with_vm_pre_step(&mut self, vm: &VirtualMachine) -> Result<()> {
-        self.state.update_state(vm, &self.ctx);
+        if let ControlFlow::Break(_) = self.state.update_state(vm, &self.ctx) {
+            return Ok(());
+        }
 
         self.maybe_handle_breakpoint_hit()?;
         self.maybe_handle_step_action()?;

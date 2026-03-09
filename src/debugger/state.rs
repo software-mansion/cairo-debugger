@@ -1,5 +1,6 @@
 use std::cmp::PartialEq;
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use cairo_annotations::annotations::coverage::CodeLocation;
@@ -35,25 +36,33 @@ impl State {
             configuration_done: false,
             execution_stopped: false,
             breakpoints: HashMap::default(),
-            current_statement_idx: StatementIdx(0),
+            current_statement_idx: StatementIdx(usize::MAX),
             call_stack: CallStack::default(),
             last_breakpoint_hit: None,
             step_action: None,
         }
     }
 
-    pub fn update_state(&mut self, vm: &VirtualMachine, ctx: &Context) {
+    pub fn update_state(&mut self, vm: &VirtualMachine, ctx: &Context) -> ControlFlow<()> {
         let current_pc = vm.get_pc();
 
         if current_pc.segment_index != 0 {
             // We cannot map pc to a sierra statement in such a case since we are before relocation.
             // Just stay at the previous pc.
             debug!("Skipping updating state for instruction with pc={current_pc}");
-            return;
+            return ControlFlow::Break(());
         }
 
-        self.current_statement_idx = ctx.statement_idx_for_pc(current_pc.offset);
-        self.call_stack.update_pre_step(self.current_statement_idx, ctx);
+        if let Some(idx) = ctx.statement_idx_for_pc(current_pc.offset)
+            && idx != self.current_statement_idx
+        {
+            self.current_statement_idx = idx;
+            self.call_stack.update_pre_step(self.current_statement_idx, ctx);
+
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        }
     }
 
     pub fn is_configuration_done(&self) -> bool {
