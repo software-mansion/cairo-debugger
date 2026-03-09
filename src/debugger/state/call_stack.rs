@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::iter;
 use std::path::Path;
 
@@ -9,6 +10,9 @@ use dap::types::{Source, StackFramePresentationhint};
 
 use crate::debugger::MIN_OBJECT_REFERENCE;
 use crate::debugger::context::Context;
+use crate::debugger::state::call_stack::variables::get_values_of_variables;
+
+mod variables;
 
 #[derive(Default)]
 pub struct CallStack {
@@ -74,12 +78,14 @@ impl CallStack {
 
     pub fn update_pre_step(&mut self, statement_idx: StatementIdx, ctx: &Context) {
         if ctx.is_function_call_statement(statement_idx) {
-            self.action_on_new_statement = Some(Action::Push(
-                self.build_stack_frames(ctx, statement_idx)
-                    // TODO(#16)
-                    .zip(iter::repeat_with(|| FunctionVariables {}))
-                    .collect(),
-            ));
+            let frames: Vec<_> = self.build_stack_frames(ctx, statement_idx).collect();
+            // TODO(#95): handle variables of inlined functions.
+            let vars = iter::repeat_n(FunctionVariables::default(), frames.len() - 1)
+                .chain(iter::once(get_values_of_variables()));
+
+            let frames_and_vars = frames.into_iter().zip(vars).collect();
+
+            self.action_on_new_statement = Some(Action::Push(frames_and_vars));
         } else if ctx.is_return_statement(statement_idx) {
             self.action_on_new_statement = Some(Action::Pop);
         }
@@ -115,10 +121,8 @@ impl CallStack {
             }
         };
 
-        let &FunctionVariables {} = if flat_index >= self.flat_length() {
-            // TODO(#16)
-            //  Build them on demand.
-            &FunctionVariables {}
+        let FunctionVariables { names_to_values } = if flat_index >= self.flat_length() {
+            get_values_of_variables()
         } else {
             self.call_frames_and_vars
                 .iter()
@@ -126,9 +130,18 @@ impl CallStack {
                 .map(|(_, vars)| vars)
                 .nth(flat_index)
                 .unwrap()
+                .clone()
         };
 
-        vec![]
+        names_to_values
+            .into_iter()
+            .map(|(name, value)| Variable {
+                name,
+                value,
+                variables_reference: 0,
+                ..Default::default()
+            })
+            .collect()
     }
 
     /// Builds a vector of stack frames, ordered from the least nested to the most nested element.
@@ -209,8 +222,10 @@ impl CallStack {
     }
 }
 
-// TODO(#16)
-struct FunctionVariables {}
+#[derive(Default, Clone)]
+struct FunctionVariables {
+    names_to_values: HashMap<String, String>,
+}
 
 pub enum RequestedVariables {
     CurrentFunction,
