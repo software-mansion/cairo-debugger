@@ -11,6 +11,7 @@ use cairo_annotations::annotations::debugger::DebuggerAnnotationsV1 as Functions
 use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
+use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
 use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
 use cairo_lang_sierra::ids::FunctionId;
 use cairo_lang_sierra::program::{
@@ -35,7 +36,7 @@ pub use file_locations::Line;
 pub struct Context {
     pub root_path: PathBuf,
     sierra_context: SierraContext,
-    statements_start_offsets: StatementsStartOffsets,
+    casm_debug_info: CairoProgramDebugInfo,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
     #[expect(dead_code)]
     cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
@@ -51,11 +52,6 @@ struct SierraContext {
     #[expect(dead_code)]
     /// Sorted branch offsets for functions, including the function entrypoint.
     branch_offsets: HashMap<FunctionId, Vec<StatementIdx>>,
-}
-
-struct StatementsStartOffsets {
-    /// Sierra statement index -> start CASM bytecode offset.
-    statement_to_pc: Vec<usize>,
 }
 
 impl Context {
@@ -82,9 +78,8 @@ impl Context {
         let casm_debug_info = compile_sierra_to_get_casm_debug_info(&program)?;
         let cairo_var_map =
             build_cairo_var_to_casm_map(&program, &casm_debug_info, functions_debug_info);
-        let statements_start_offsets = extract_statements_start_offsets(&casm_debug_info);
 
-        let files_data = build_file_locations_map(&statements_start_offsets, &code_locations);
+        let files_data = build_file_locations_map(&casm_debug_info, &code_locations);
 
         #[cfg(feature = "dev")]
         let labels = readable_sierra_ids::extract_labels(&program);
@@ -103,19 +98,17 @@ impl Context {
 
             root_path,
             sierra_context,
-            statements_start_offsets,
+            casm_debug_info,
             files_data,
             cairo_var_map,
         })
     }
 
-    pub fn statement_idx_for_pc(&self, pc: usize) -> StatementIdx {
-        StatementIdx(
-            self.statements_start_offsets
-                .statement_to_pc
-                .partition_point(|&offset| offset <= pc)
-                .saturating_sub(1),
-        )
+    pub fn statement_idx_for_pc(&self, pc: usize) -> Option<StatementIdx> {
+        match map_pc_to_sierra_statement_id(&self.casm_debug_info.sierra_statement_info, pc, 0) {
+            MappingResult::SierraStatementIdx(idx) => Some(idx),
+            MappingResult::Header | MappingResult::PcOutOfFunctionArea => None,
+        }
     }
 
     /// Return code location for the current statement, not including inlined code locations.
@@ -225,15 +218,6 @@ fn extract_branch_offsets(program: &Program) -> HashMap<FunctionId, Vec<Statemen
 
 fn sierra_function_for_statement(statement_idx: usize, program: &Program) -> &Function {
     &program.funcs[program.funcs.partition_point(|x| x.entry_point.0 <= statement_idx) - 1]
-}
-
-fn extract_statements_start_offsets(
-    casm_debug_info: &CairoProgramDebugInfo,
-) -> StatementsStartOffsets {
-    let statement_to_pc =
-        casm_debug_info.sierra_statement_info.iter().map(|x| x.start_offset).collect();
-
-    StatementsStartOffsets { statement_to_pc }
 }
 
 fn compile_sierra_to_get_casm_debug_info(program: &Program) -> Result<CairoProgramDebugInfo> {

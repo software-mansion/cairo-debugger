@@ -1,13 +1,13 @@
 use std::collections::HashMap;
-use std::ops::Not;
 use std::path::PathBuf;
 
 use cairo_annotations::annotations::coverage::{
     CodeLocation, CoverageAnnotationsV1 as SierraCodeLocations,
 };
 use cairo_lang_sierra::program::StatementIdx;
+use cairo_lang_sierra_to_casm::compiler::CairoProgramDebugInfo;
 
-use crate::debugger::context::{Context, StatementsStartOffsets};
+use crate::debugger::context::Context;
 
 /// A map that stores a vector of ***hittable*** Sierra statement indexes for each line in a file.
 #[derive(Default)]
@@ -33,16 +33,14 @@ impl Line {
 }
 
 pub fn build_file_locations_map(
-    statements_start_offsets: &StatementsStartOffsets,
+    casm_debug_info: &CairoProgramDebugInfo,
     code_location_annotations: &SierraCodeLocations,
 ) -> HashMap<PathBuf, FileCodeLocationsData> {
     let mut file_map: HashMap<_, FileCodeLocationsData> = HashMap::new();
 
     let hittable_statements_code_locations =
         code_location_annotations.statements_code_locations.iter().filter(|(statement_idx, _)| {
-            let statement_offset = statements_start_offsets.statement_to_pc[statement_idx.0];
-            let next_statement_offset =
-                statements_start_offsets.statement_to_pc.get(statement_idx.0 + 1);
+            let statement_info = &casm_debug_info.sierra_statement_info[statement_idx.0];
 
             // If the next sierra statement maps to the same pc, it means the compilation of the
             // current statement did not produce any CASM instructions.
@@ -63,9 +61,7 @@ pub fn build_file_locations_map(
             // Even though the statement maps to some Cairo code in coverage mappings,
             // it does not compile to any CASM instructions directly - check the link below.
             // https://github.com/starkware-libs/cairo/blob/27f9d1a3fcd00993ff43016ce9579e36064e5266/crates/cairo-lang-sierra-to-casm/src/invocations/mod.rs#L718
-            // TODO(#61): compare `start_offset` and `end_offset` of current statement instead once USC
-            //  (and thus snforge) starts providing full `CairoProgramDebugInfo` + update the comment.
-            next_statement_offset.is_some_and(|offset| *offset == statement_offset).not()
+            statement_info.start_offset != statement_info.end_offset
         });
 
     for (statement_idx, locations) in hittable_statements_code_locations {
