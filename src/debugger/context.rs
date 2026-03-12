@@ -13,10 +13,7 @@ use cairo_annotations::annotations::profiler::{
 };
 use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
 use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
-use cairo_lang_sierra::ids::FunctionId;
-use cairo_lang_sierra::program::{
-    Function, GenBranchTarget, GenStatement, Program, ProgramArtifact, Statement, StatementIdx,
-};
+use cairo_lang_sierra::program::{Function, Program, ProgramArtifact, Statement, StatementIdx};
 use cairo_lang_sierra::program_registry::ProgramRegistry;
 use cairo_lang_sierra_to_casm::compiler::{CairoProgramDebugInfo, SierraToCasmConfig};
 use cairo_lang_sierra_to_casm::metadata::calc_metadata;
@@ -49,9 +46,6 @@ struct SierraContext {
     sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
     code_locations: SierraCodeLocations,
     function_names: SierraFunctionNames,
-    #[expect(dead_code)]
-    /// Sorted branch offsets for functions, including the function entrypoint.
-    branch_offsets: HashMap<FunctionId, Vec<StatementIdx>>,
 }
 
 impl Context {
@@ -72,8 +66,6 @@ impl Context {
         let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)?;
         let function_names = SierraFunctionNames::try_from_debug_info(&debug_info)?;
 
-        let branch_offsets = extract_branch_offsets(&program);
-
         // TODO(#61)
         let casm_debug_info = compile_sierra_to_get_casm_debug_info(&program)?;
         let cairo_var_map =
@@ -84,13 +76,8 @@ impl Context {
         #[cfg(feature = "dev")]
         let labels = readable_sierra_ids::extract_labels(&program);
 
-        let sierra_context = SierraContext {
-            program,
-            sierra_program_registry,
-            code_locations,
-            function_names,
-            branch_offsets,
-        };
+        let sierra_context =
+            SierraContext { program, sierra_program_registry, code_locations, function_names };
 
         Ok(Self {
             #[cfg(feature = "dev")]
@@ -179,41 +166,6 @@ impl Context {
 
         eprintln!("{with_labels}")
     }
-}
-
-fn extract_branch_offsets(program: &Program) -> HashMap<FunctionId, Vec<StatementIdx>> {
-    let mut branch_offsets: HashMap<_, _> =
-        program.funcs.iter().map(|func| (func.id.clone(), vec![func.entry_point])).collect();
-
-    for (idx, statement) in program.statements.iter().enumerate() {
-        match statement {
-            GenStatement::Invocation(invocation) => {
-                let statement_branch_offsets: Vec<_> = invocation
-                    .branches
-                    .iter()
-                    .filter_map(|branch_info| match branch_info.target {
-                        GenBranchTarget::Statement(statement_idx) => Some(statement_idx),
-                        GenBranchTarget::Fallthrough => None,
-                    })
-                    .collect();
-
-                if !statement_branch_offsets.is_empty() {
-                    let function_id = sierra_function_for_statement(idx, program).id.clone();
-                    branch_offsets
-                        .entry(function_id)
-                        .or_insert_with(|| unreachable!())
-                        .extend(statement_branch_offsets);
-                }
-            }
-            GenStatement::Return(_) => {}
-        }
-    }
-
-    for offsets in branch_offsets.values_mut() {
-        offsets.sort();
-    }
-
-    branch_offsets
 }
 
 fn sierra_function_for_statement(statement_idx: usize, program: &Program) -> &Function {
