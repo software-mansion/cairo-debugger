@@ -13,7 +13,9 @@ use cairo_annotations::annotations::profiler::{
 };
 use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
 use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
-use cairo_lang_sierra::program::{Function, Program, ProgramArtifact, Statement, StatementIdx};
+use cairo_lang_sierra::program::{
+    Function, GenBranchTarget, Program, ProgramArtifact, Statement, StatementIdx,
+};
 use cairo_lang_sierra::program_registry::ProgramRegistry;
 use cairo_lang_sierra_to_casm::compiler::{CairoProgramDebugInfo, SierraToCasmConfig};
 use cairo_lang_sierra_to_casm::metadata::calc_metadata;
@@ -150,6 +152,30 @@ impl Context {
             }
             Statement::Return(_) => false,
         }
+    }
+
+    pub fn branches_for_statement(&self, statement_idx: StatementIdx) -> Vec<StatementIdx> {
+        match self.statement_idx_to_statement(statement_idx) {
+            Statement::Invocation(invocation) => invocation
+                .branches
+                .iter()
+                .map(|gen_branch_info| match gen_branch_info.target {
+                    GenBranchTarget::Fallthrough => StatementIdx(statement_idx.0 + 1),
+                    GenBranchTarget::Statement(idx) => idx,
+                })
+                .collect(),
+            // TODO(#91)
+            Statement::Return(_) => Vec::new(),
+        }
+    }
+
+    pub fn does_compile_to_casm(&self, statement_idx: StatementIdx) -> bool {
+        let info = &self.casm_debug_info.sierra_statement_info[statement_idx.0];
+        info.start_offset != info.end_offset
+    }
+
+    pub fn sierra_function_for_statement(&self, statement_idx: StatementIdx) -> &Function {
+        sierra_function_for_statement(statement_idx.0, &self.sierra_context.program)
     }
 
     fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
