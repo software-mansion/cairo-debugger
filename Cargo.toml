@@ -10,6 +10,7 @@ cairo-annotations = { git = "https://github.com/software-mansion/cairo-annotatio
 # Lock to 2.12. since snforge uses this and Cairo does not respect semver.
 cairo-lang-sierra = "2.12"
 cairo-lang-sierra-to-casm = "2.12"
+cairo-lang-casm = "2.12"
 indexmap = "2.13"
 scarb-metadata = "1"
 serde_json = "1"

@@ -178,6 +178,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cairo-annotations",
+ "cairo-lang-casm",
  "cairo-lang-sierra",
  "cairo-lang-sierra-to-casm",
  "cairo-vm",

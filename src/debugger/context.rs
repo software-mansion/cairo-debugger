@@ -22,7 +22,7 @@ use cairo_lang_sierra_to_casm::metadata::calc_metadata;
 use scarb_metadata::MetadataCommand;
 
 use crate::debugger::context::file_locations::{FileCodeLocationsData, build_file_locations_map};
-use crate::debugger::context::variables::{CairoVarsInStatement, build_cairo_var_to_casm_map};
+use crate::debugger::context::variables::build_cairo_var_to_casm_map;
 
 mod file_locations;
 #[cfg(feature = "dev")]
@@ -30,6 +30,7 @@ mod readable_sierra_ids;
 mod variables;
 
 pub use file_locations::Line;
+pub use variables::{CairoVarId, CairoVarReference, CairoVarsInStatement};
 
 /// Struct that holds all the initial data needed for the debugger during execution.
 pub struct Context {
@@ -37,8 +38,7 @@ pub struct Context {
     sierra_context: SierraContext,
     casm_debug_info: CairoProgramDebugInfo,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
-    #[expect(dead_code)]
-    cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
+    pub cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
     #[cfg(feature = "dev")]
     labels: HashMap<usize, String>,
 }
