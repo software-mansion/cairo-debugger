@@ -2,6 +2,7 @@ use cairo_annotations::annotations::coverage::SourceCodeSpan;
 use cairo_lang_casm::cell_expression::{CellExpression, CellOperator};
 use cairo_lang_casm::operand::{CellRef, DerefOrImmediate};
 use cairo_lang_sierra::ids::VarId;
+use cairo_lang_sierra::program::{ConcreteTypeLongId, GenericArg};
 use cairo_vm::Felt252;
 use cairo_vm::vm::vm_core::VirtualMachine;
 use indexmap::IndexMap;
@@ -28,11 +29,22 @@ pub fn get_values_of_variables(
             continue;
         };
 
+        let (branch_signature, branch_results) =
+            ctx.branch_signature_and_results(*idx, branch_target).expect(
+                "return statement not expected - or we wouldn't be in this function frame already",
+            );
+
         for (
             CairoVarId { name, definition_span: span },
             CairoVarReference { sierra_id: var_id, ref_expr },
         ) in produced_vars
         {
+            let type_long_id = &ctx.var_type_info(var_id, branch_signature, branch_results).long_id;
+
+            if is_panic_result(type_long_id) {
+                continue;
+            }
+
             let cells_vals: Vec<_> = ref_expr
                 .cells
                 .iter()
@@ -73,6 +85,21 @@ pub fn get_values_of_variables(
         .collect();
 
     FunctionVariables { names_to_values }
+}
+
+fn is_panic_result(type_long_id: &ConcreteTypeLongId) -> bool {
+    if type_long_id.generic_id.0 == "Enum"
+        && let GenericArg::UserType(user_type) = &type_long_id.generic_args[0]
+        // `core::panics::PanicResult` always has a debug name for some reason.
+        && user_type
+        .debug_name
+        .clone()
+        .is_some_and(|x| x.starts_with("core::panics::PanicResult"))
+    {
+        true
+    } else {
+        false
+    }
 }
 
 fn maybe_extract_felt_from_cell(

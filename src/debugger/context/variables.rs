@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 
 use cairo_annotations::annotations::coverage::SourceCodeSpan;
 use cairo_annotations::annotations::debugger::{
@@ -18,6 +19,12 @@ pub struct CairoVarsInStatement {
 
     /// Variables produced when entering branches of the sierra statement.
     pub produced: HashMap<GenBranchTargetHashable, HashMap<CairoVarId, CairoVarReference>>,
+}
+
+impl Debug for CairoVarsInStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CairoVarsInStatement").field("produced", &self.produced).finish()
+    }
 }
 
 /// Unique identifier of a Cairo variable.
