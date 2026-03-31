@@ -189,7 +189,7 @@ pub fn handle_request(
             // We record the current call stack depth. The debugger will resume execution
             // and only stop when it reaches a new line at the same or a shallower call stack depth.
             // This effectively "steps over" any function calls.
-            let line = Line::create_from_statement_idx(state.current_statement_idx, ctx);
+            let line = Line::create_from_statement_idx(state.current_statement_idx, ctx).unwrap();
 
             state.step_action = Some(StepAction::Next {
                 depth: state.call_stack.depth(state.current_statement_idx, ctx),
@@ -205,7 +205,7 @@ pub fn handle_request(
             // To handle a "step in" action, we set the step action to `StepIn`.
             // The debugger will resume execution and stop at the very next executable line,
             // which might be inside a function call.
-            let line = Line::create_from_statement_idx(state.current_statement_idx, ctx);
+            let line = Line::create_from_statement_idx(state.current_statement_idx, ctx).unwrap();
 
             state.step_action = Some(StepAction::StepIn { prev_line: line });
             state.resume_execution();
