@@ -13,8 +13,12 @@ use cairo_annotations::annotations::profiler::{
 };
 use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
 use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
+use cairo_lang_sierra::extensions::lib_func::BranchSignature;
+use cairo_lang_sierra::extensions::types::TypeInfo;
+use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType};
+use cairo_lang_sierra::ids::VarId;
 use cairo_lang_sierra::program::{
-    Function, GenBranchTarget, Program, ProgramArtifact, Statement, StatementIdx,
+    Function, GenBranchTarget, GenInvocation, Program, ProgramArtifact, Statement, StatementIdx,
 };
 use cairo_lang_sierra::program_registry::ProgramRegistry;
 use cairo_lang_sierra_to_casm::compiler::{CairoProgramDebugInfo, SierraToCasmConfig};
@@ -178,6 +182,41 @@ impl Context {
         sierra_function_for_statement(statement_idx.0, &self.sierra_context.program)
     }
 
+    pub fn branch_signature_and_results(
+        &self,
+        statement_idx: StatementIdx,
+        branch_target: &GenBranchTarget<StatementIdx>,
+    ) -> Option<(&BranchSignature, &Vec<VarId>)> {
+        let Statement::Invocation(GenInvocation { libfunc_id, branches, .. }) =
+            self.statement_idx_to_statement(statement_idx)
+        else {
+            return None;
+        };
+
+        let branch_index = branches.iter().position(|info| &info.target == branch_target).unwrap();
+        let branch_signature = &self
+            .sierra_context
+            .sierra_program_registry
+            .get_libfunc(libfunc_id)
+            .unwrap()
+            .branch_signatures()[branch_index];
+        let branch_results = &branches[branch_index].results;
+
+        Some((branch_signature, branch_results))
+    }
+
+    pub fn var_type_info(
+        &self,
+        var_id: &VarId,
+        branch_signature: &BranchSignature,
+        branch_results: &[VarId],
+    ) -> &TypeInfo {
+        let var_index = branch_results.iter().position(|id| id == var_id).unwrap();
+        let var_type = &branch_signature.vars[var_index].ty;
+
+        self.sierra_context.sierra_program_registry.get_type(var_type).unwrap().info()
+    }
+
     fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
         &self.sierra_context.program.statements[statement_idx.0]
     }
@@ -190,7 +229,7 @@ impl Context {
             self.labels[&idx.0].clone()
         });
 
-        eprintln!("{with_labels}")
+        eprintln!("{} {with_labels}", statement_idx.0);
     }
 }
 

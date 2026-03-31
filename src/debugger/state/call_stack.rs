@@ -262,16 +262,15 @@ type PostStatementsRegisters =
 
 #[derive(Default)]
 struct SierraFunctionContext {
-    /// Mapping from sierra statements executed during the function execution to values of registers
+    /// Mapping from sierra statements executed during the function frame execution to values of registers
     /// right after entering any branch of the statement (by definition only one branch is entered)
     /// and the entered branch target.
-    ///
     ///
     /// Note that in general this is ***NOT*** the same as values of registers right after executing
     /// the statement itself, even though it may be the case for a lot of simple libfuncs.
     ///
     /// The mapping uses [`IndexMap`] to memorise the order of statement execution, allowing for
-    /// retrieval of the trace of executed sierra statements within the function.
+    /// retrieval of the trace of executed sierra statements within the function frame.
     post_statements_registers: PostStatementsRegisters,
 
     last_executed_statement: Option<StatementIdx>,
@@ -378,7 +377,7 @@ struct RegistersValues {
 }
 
 impl RegistersValues {
-    pub fn relocatable_from_cell_ref(&self, cell_ref: &CellRef) -> Relocatable {
+    fn relocatable_from_cell_ref(&self, cell_ref: &CellRef) -> Relocatable {
         let original_offset = match cell_ref.register {
             Register::AP => self.ap,
             Register::FP => self.fp,
