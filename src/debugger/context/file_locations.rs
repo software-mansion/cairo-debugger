@@ -24,11 +24,10 @@ impl Line {
         Self(line)
     }
 
-    pub fn create_from_statement_idx(statement_idx: StatementIdx, ctx: &Context) -> Self {
-        let CodeLocation(_, code_span, _) = ctx
-            .code_location_for_statement_idx(statement_idx)
-            .expect("statement was expected to have corresponding code location");
-        Self(code_span.start.line.0)
+    pub fn create_from_statement_idx(statement_idx: StatementIdx, ctx: &Context) -> Option<Self> {
+        let CodeLocation(_, code_span, _) = ctx.code_location_for_statement_idx(statement_idx)?;
+
+        Some(Self(code_span.start.line.0))
     }
 }
 

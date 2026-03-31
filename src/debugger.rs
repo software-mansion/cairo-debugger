@@ -101,8 +101,11 @@ impl CairoDebugger {
     }
 
     fn maybe_handle_step_action(&mut self, vm: &VirtualMachine) -> Result<()> {
-        let current_line =
-            Line::create_from_statement_idx(self.state.current_statement_idx, &self.ctx);
+        let Some(current_line) =
+            Line::create_from_statement_idx(self.state.current_statement_idx, &self.ctx)
+        else {
+            return Ok(());
+        };
 
         let step_action_happened = self.state.has_step_action_happened(current_line, &self.ctx);
 
