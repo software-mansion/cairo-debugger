@@ -57,20 +57,24 @@ struct SierraContext {
 impl Context {
     pub fn new(sierra_path: &Path) -> Result<Self> {
         let root_path = get_project_root_path(sierra_path)?;
-        let content = fs::read_to_string(sierra_path).expect("Failed to load sierra file");
+        let content = fs::read_to_string(sierra_path).context("failed to read sierra file")?;
 
         let sierra_program: ProgramArtifact = serde_json::from_str(&content)?;
         let program = sierra_program.program;
         let sierra_program_registry =
-            ProgramRegistry::new(&program).expect("creating program registry failed");
+            ProgramRegistry::new(&program).context("creating program registry failed")?;
 
-        let debug_info = sierra_program
-            .debug_info
-            .ok_or_else(|| anyhow!("debug_info must be present in compiled sierra"))?;
+        let debug_info = sierra_program.debug_info.ok_or_else(|| {
+            anyhow!("sierra debug info is missing - enable generating it in your Scarb.toml")
+        })?;
 
-        let code_locations = SierraCodeLocations::try_from_debug_info(&debug_info)?;
-        let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)?;
-        let function_names = SierraFunctionNames::try_from_debug_info(&debug_info)?;
+        let code_locations = SierraCodeLocations::try_from_debug_info(&debug_info)
+            .context("statements code locations debug info is missing - enable generating it in your Scarb.toml")?;
+        let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)
+            .context("functions debug info is missing - enable generating it in your Scarb.toml")?;
+        let function_names = SierraFunctionNames::try_from_debug_info(&debug_info).context(
+            "statements functions debug info is missing - enable generating it in your Scarb.toml",
+        )?;
 
         // TODO(#61)
         let casm_debug_info = compile_sierra_to_get_casm_debug_info(&program)?;
@@ -239,13 +243,13 @@ fn sierra_function_for_statement(statement_idx: usize, program: &Program) -> &Fu
 
 fn compile_sierra_to_get_casm_debug_info(program: &Program) -> Result<CairoProgramDebugInfo> {
     let metadata = calc_metadata(program, Default::default())
-        .with_context(|| "Failed calculating metadata.")?;
+        .with_context(|| "failed calculating CASM metadata.")?;
     let cairo_program = cairo_lang_sierra_to_casm::compiler::compile(
         program,
         &metadata,
         SierraToCasmConfig { gas_usage_check: true, max_bytecode_size: usize::MAX },
     )
-    .with_context(|| "Compilation failed.")?;
+    .with_context(|| "sierra to CASM compilation failed.")?;
 
     Ok(cairo_program.debug_info)
 }
@@ -253,10 +257,10 @@ fn compile_sierra_to_get_casm_debug_info(program: &Program) -> Result<CairoProgr
 // TODO(#50)
 fn get_project_root_path(sierra_path: &Path) -> Result<PathBuf> {
     Ok(MetadataCommand::new()
-        .current_dir(sierra_path.parent().expect("Compiled Sierra must be in target directory"))
+        .current_dir(sierra_path.parent().expect("compiled sierra must be in target directory"))
         .inherit_stderr()
         .exec()
-        .context("Failed to get project metadata from Scarb")?
+        .context("failed to get project metadata from scarb")?
         .workspace
         .root
         .into())

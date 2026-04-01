@@ -32,8 +32,8 @@ pub struct CairoDebugger {
 
 impl CairoDebugger {
     pub fn connect_and_initialize(sierra_path: &Path) -> Result<Self> {
-        let connection = Connection::new()?;
         let ctx = Context::new(sierra_path)?;
+        let connection = Connection::new()?;
 
         let mut debugger = Self { connection, ctx, state: State::new() };
         debugger.initialize()?;
