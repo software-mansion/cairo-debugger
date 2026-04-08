@@ -25,7 +25,7 @@ pub fn get_values_of_variables(
     for (idx, (branch_target, registers_values)) in post_statements_registers {
         let Some(variables) = ctx.cairo_var_map.get(idx) else { continue };
 
-        let Some(produced_vars) = variables.produced.get(&branch_target.clone().into()) else {
+        let Some(produced_vars) = variables.produced.get(&((*branch_target).into())) else {
             continue;
         };
 

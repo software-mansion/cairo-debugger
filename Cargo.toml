@@ -4,19 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0"
+cairo-annotations = { version = "0.8.0", features = ["cairo-lang"] }
+cairo-lang-casm = "2.17.0"
+cairo-lang-sierra = "2.17.0"
+cairo-lang-sierra-to-casm = "2.17.0"
+cairo-lang-sierra-type-size = "2.17.0"
+cairo-vm = { version = "3.2.0", features = ["test_utils"] }
 dap = { git = "https://github.com/software-mansion-labs/dap-rs", rev = "27542c413184732cd8cb5632c8349d605ed4fe04" }
-cairo-vm = { git = "https://github.com/software-mansion-labs/cairo-vm", rev = "4675b55df938162dbefb546242bafaf7d2d51efd", features = ["test_utils"] }
-cairo-annotations = { git = "https://github.com/software-mansion/cairo-annotations", rev = "9fa3bff91bb97db51e180f2c6997c9de2e212029", features = ["cairo-lang"] }
-# Lock to 2.12. since snforge uses this and Cairo does not respect semver.
-cairo-lang-sierra = "2.12"
-cairo-lang-sierra-to-casm = "2.12"
-cairo-lang-casm = "2.12"
 indexmap = "2.13"
 scarb-metadata = "1"
 serde_json = "1"
-tracing = "0.1"
-anyhow = "1.0"
 starknet-types-core = "0.2.4"
+tracing = "0.1"
 
 [features]
 dev = []

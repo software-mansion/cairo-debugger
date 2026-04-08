@@ -12,7 +12,7 @@ use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
 use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
-use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreLibfunc, CoreType};
+use cairo_lang_sierra::extensions::core::CoreConcreteLibfunc;
 use cairo_lang_sierra::extensions::lib_func::BranchSignature;
 use cairo_lang_sierra::extensions::types::TypeInfo;
 use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType};
@@ -20,9 +20,9 @@ use cairo_lang_sierra::ids::VarId;
 use cairo_lang_sierra::program::{
     Function, GenBranchTarget, GenInvocation, Program, ProgramArtifact, Statement, StatementIdx,
 };
-use cairo_lang_sierra::program_registry::ProgramRegistry;
 use cairo_lang_sierra_to_casm::compiler::{CairoProgramDebugInfo, SierraToCasmConfig};
 use cairo_lang_sierra_to_casm::metadata::calc_metadata;
+use cairo_lang_sierra_type_size::ProgramRegistryInfo;
 use scarb_metadata::MetadataCommand;
 
 use crate::debugger::context::file_locations::{FileCodeLocationsData, build_file_locations_map};
@@ -49,7 +49,7 @@ pub struct Context {
 
 struct SierraContext {
     program: Program,
-    sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
+    program_registry_info: ProgramRegistryInfo,
     code_locations: SierraCodeLocations,
     function_names: SierraFunctionNames,
 }
@@ -61,8 +61,8 @@ impl Context {
 
         let sierra_program: ProgramArtifact = serde_json::from_str(&content)?;
         let program = sierra_program.program;
-        let sierra_program_registry =
-            ProgramRegistry::new(&program).context("creating program registry failed")?;
+        let program_registry_info =
+            ProgramRegistryInfo::new(&program).context("creating program registry failed")?;
 
         let debug_info = sierra_program.debug_info.ok_or_else(|| {
             anyhow!("sierra debug info is missing - enable generating it in your Scarb.toml")
@@ -77,7 +77,8 @@ impl Context {
         )?;
 
         // TODO(#61)
-        let casm_debug_info = compile_sierra_to_get_casm_debug_info(&program)?;
+        let casm_debug_info =
+            compile_sierra_to_get_casm_debug_info(&program, &program_registry_info)?;
         let cairo_var_map =
             build_cairo_var_to_casm_map(&program, &casm_debug_info, functions_debug_info);
 
@@ -87,7 +88,7 @@ impl Context {
         let labels = readable_sierra_ids::extract_labels(&program);
 
         let sierra_context =
-            SierraContext { program, sierra_program_registry, code_locations, function_names };
+            SierraContext { program, program_registry_info, code_locations, function_names };
 
         Ok(Self {
             #[cfg(feature = "dev")]
@@ -154,7 +155,10 @@ impl Context {
         match self.statement_idx_to_statement(statement_idx) {
             Statement::Invocation(invocation) => {
                 matches!(
-                    self.sierra_context.sierra_program_registry.get_libfunc(&invocation.libfunc_id),
+                    self.sierra_context
+                        .program_registry_info
+                        .registry
+                        .get_libfunc(&invocation.libfunc_id),
                     Ok(CoreConcreteLibfunc::FunctionCall(_))
                 )
             }
@@ -200,7 +204,8 @@ impl Context {
         let branch_index = branches.iter().position(|info| &info.target == branch_target).unwrap();
         let branch_signature = &self
             .sierra_context
-            .sierra_program_registry
+            .program_registry_info
+            .registry
             .get_libfunc(libfunc_id)
             .unwrap()
             .branch_signatures()[branch_index];
@@ -218,7 +223,7 @@ impl Context {
         let var_index = branch_results.iter().position(|id| id == var_id).unwrap();
         let var_type = &branch_signature.vars[var_index].ty;
 
-        self.sierra_context.sierra_program_registry.get_type(var_type).unwrap().info()
+        self.sierra_context.program_registry_info.registry.get_type(var_type).unwrap().info()
     }
 
     fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
@@ -241,11 +246,15 @@ fn sierra_function_for_statement(statement_idx: usize, program: &Program) -> &Fu
     &program.funcs[program.funcs.partition_point(|x| x.entry_point.0 <= statement_idx) - 1]
 }
 
-fn compile_sierra_to_get_casm_debug_info(program: &Program) -> Result<CairoProgramDebugInfo> {
-    let metadata = calc_metadata(program, Default::default())
+fn compile_sierra_to_get_casm_debug_info(
+    program: &Program,
+    program_registry_info: &ProgramRegistryInfo,
+) -> Result<CairoProgramDebugInfo> {
+    let metadata = calc_metadata(program, program_registry_info, Default::default())
         .with_context(|| "failed calculating CASM metadata.")?;
     let cairo_program = cairo_lang_sierra_to_casm::compiler::compile(
         program,
+        program_registry_info,
         &metadata,
         SierraToCasmConfig { gas_usage_check: true, max_bytecode_size: usize::MAX },
     )

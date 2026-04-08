@@ -107,7 +107,7 @@ pub fn build_cairo_var_to_casm_map(
                                 })
                                 .collect();
 
-                            (gen_branch_info.target.clone().into(), cairo_var_refs)
+                            (gen_branch_info.target.into(), cairo_var_refs)
                         })
                         .collect();
 
