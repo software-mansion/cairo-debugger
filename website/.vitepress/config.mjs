@@ -19,13 +19,14 @@ const getSidebar = () => ({
             text: "Overview",
             items: [
                 p("Quick start", "/docs"),
+                p("Troubleshooting", "/docs/troubleshooting"),
+                p("Advanced concepts", "/docs/advanced"),
             ],
         },
         {
             text: "Guides",
             items: [
                 p("Debugging in VSCode", "/docs/guide"),
-                p("Troubleshooting", "/docs/troubleshooting"),
             ],
         },
     ],
