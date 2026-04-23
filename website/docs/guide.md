@@ -20,7 +20,7 @@ Open the root folder of your Cairo project (the one containing `Scarb.toml`) wit
 
 Click in the gutter (the space to the left of the line numbers) on any Cairo source line where you want execution to pause. A red dot confirms the breakpoint is set.
 
-<img height="400" src="/Breakpoints.png" title="Debugger lens" width="400"/>
+<img height="400" src="/Breakpoints.png" title="Breakpoints" width="400"/>
 
 > [!TIP]
 > You can set multiple breakpoints before launching. The debugger will stop at each one in order.
@@ -31,31 +31,6 @@ The [Cairo Language Server](https://docs.swmansion.com/cairols/) - which is dist
 adds a **▶ Debug Test** code lens above every test function. Click it to start a debugging session.
 
 <img height="200" src="/DebuggerLens.png" title="Debugger lens" width="200"/>
-
-Alternatively, configure a custom launch in `.vscode/launch.json`, for example:
-
-```json
-{
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "cairo",
-            "request": "launch",
-            "name": "my_pkg::tests::my_test debug",
-            "program": "snforge test --package my_pkg --launch-debugger --exact my_pkg::tests::my_test",
-            "processCwd": "${workspaceFolder}"
-        }
-    ]
-}
-```
-
-and use the **Run and Debug** view (`Ctrl+Shift+D` / `Cmd+Shift+D`):
-
-<img height="500" src="/RunAndDebug.png" title="Run and Debug" width="500"/>
-
-
-You can read more about debug configurations [here](https://code.visualstudio.com/docs/debugtest/debugging-configuration).
-
 
 ## Step 4 - Navigate the debugger
 
@@ -68,15 +43,17 @@ Once execution hits a breakpoint, use the standard VSCode debug toolbar:
 | Step Into | `F11` | <img height="50" src="/StepInto.png" title="Step Into" width="50"/> | Step into the function call on the current line |
 | Step Out | `Shift+F11` | <img height="50" src="/StepOut.png" title="Step Out" width="50"/> | Run until the current function returns |
 | Restart | `Cmd+Shift+F5` / `Ctrl+Shift+F5` | <img height="50" src="/Restart.png" title="Restart" width="50"/> | Restart the debugging session |
-| Stop | `Shift+F5` | <img height="50" src="/Stop.png" title="Sop" width="50"/> | Terminate the session |
+| Stop | `Shift+F5` | <img height="50" src="/Stop.png" title="Stop" width="50"/> | Terminate the session |
+
+Check [here](https://code.visualstudio.com/docs/debugtest/debugging) for details on how to interact with the VSCode UI.
 
 ## Step 5 - Inspect variables and call stack
 
 While paused, the **Variables** panel in the **Run and Debug** view shows current values of local variables of the current function frame.
 Similarly, the **Call Stack** panel shows function frames that are currently on the stack.
 
-<img height="800" src="/Variables.png" title="Run and Debug" width="800"/>
+<img height="800" src="/Variables.png" title="Variables" width="800"/>
 
 You can click on different function frames to inspect variables of these function frames.
 
-<img height="800" src="/VariablesDifferentFrame.png" title="Run and Debug" width="800"/>
+<img height="800" src="/VariablesDifferentFrame.png" title="Variables for a different frame" width="800"/>
