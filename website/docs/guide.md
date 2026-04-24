@@ -8,7 +8,7 @@ Before you start, make sure you have:
 
 - [**snforge**](https://foundry-rs.github.io/starknet-foundry/getting-started/installation.html) `>=0.60.0`
 - [**Scarb**](https://docs.swmansion.com/scarb/download.html) `>=2.18.0`
-- The lastest [**Cairo 1.0**](https://marketplace.visualstudio.com/items?itemName=starkware.cairo1) VSCode extension `>=3.5.0`
+- The lastest [**Cairo 1.0**](https://marketplace.visualstudio.com/items?itemName=starkware.cairo1) VSCode extension `>=3.6.0`
 
 Also, complete the [Scarb.toml configuration](../docs#prerequisites) from the quick start before continuing.
 
