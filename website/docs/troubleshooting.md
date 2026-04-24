@@ -50,7 +50,7 @@ In some packages while launching the debugger, you may get an error similar to t
 
 This error happens due to overflow of offset value during Sierra to CASM compilation.
 
-This happens e.g. in version `0.10.0` of [`alexandria_encoding`](https://scarbs.xyz/packages/alexandria_encoding/0.10.0)
+This occurs e.g. in version `0.10.0` of [`alexandria_encoding`](https://scarbs.xyz/packages/alexandria_encoding/0.10.0)
 due to existence of [this](https://github.com/keep-starknet-strange/alexandria/blob/v0.10.0/packages/encoding/tests/sol_abi.cairo#L182) test.
 
 > [!NOTE]

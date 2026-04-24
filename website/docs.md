@@ -16,7 +16,7 @@ To make the Cairo Debugger work, you have to install:
 1. **snforge** - a part of [Starknet Foundry](https://foundry-rs.github.io/starknet-foundry/getting-started/installation.html). Make sure to use version `>=0.60.0`
 2. [Scarb](https://docs.swmansion.com/scarb/download.html) package manager. Make sure to use version `>=2.18.0`.
 3. For Visual Studio Code, install the **latest** [Cairo 1.0](https://marketplace.visualstudio.com/items?itemName=starkware.cairo1) extension from the marketplace.
-   Make sure to use version `>=3.5.0`.
+   Make sure to use version `>=3.6.0`.
 
 ## Prerequisites
 
@@ -37,7 +37,7 @@ skip-optimizations = true
 
 Click the **▶ Debug Test** code lens above the test function you want to debug - the Cairo extension will start a debugging session automatically.
 
-See the [Debugging in VSCode](./docs/guide) for a full step-by-step walkthrough.
+See the [Debugging in VSCode](./docs/guide) guide for a full step-by-step walkthrough.
 
 ### Debugging in another IDE
 
