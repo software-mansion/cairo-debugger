@@ -39,7 +39,8 @@ pub fn get_values_of_variables(
             CairoVarReference { sierra_id: var_id, ref_expr },
         ) in produced_vars
         {
-            let type_long_id = &ctx.var_type_info(var_id, branch_signature, branch_results).long_id;
+            let type_id = ctx.var_type_id(var_id, branch_signature, branch_results).clone();
+            let type_long_id = &ctx.var_type_info(&type_id).long_id;
 
             if is_panic_result(type_long_id) {
                 continue;
