@@ -16,7 +16,7 @@ use cairo_lang_sierra::extensions::core::CoreConcreteLibfunc;
 use cairo_lang_sierra::extensions::lib_func::BranchSignature;
 use cairo_lang_sierra::extensions::types::TypeInfo;
 use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType};
-use cairo_lang_sierra::ids::VarId;
+use cairo_lang_sierra::ids::{ConcreteTypeId, VarId};
 use cairo_lang_sierra::program::{
     Function, GenBranchTarget, GenInvocation, Program, ProgramArtifact, Statement, StatementIdx,
 };
@@ -214,16 +214,33 @@ impl Context {
         Some((branch_signature, branch_results))
     }
 
-    pub fn var_type_info(
+    pub fn var_type_info(&self, concrete_type_id: &ConcreteTypeId) -> &TypeInfo {
+        self.sierra_context
+            .program_registry_info
+            .registry
+            .get_type(concrete_type_id)
+            .unwrap()
+            .info()
+    }
+
+    pub fn var_type_id<'a>(
         &self,
         var_id: &VarId,
-        branch_signature: &BranchSignature,
+        branch_signature: &'a BranchSignature,
         branch_results: &[VarId],
-    ) -> &TypeInfo {
+    ) -> &'a ConcreteTypeId {
         let var_index = branch_results.iter().position(|id| id == var_id).unwrap();
-        let var_type = &branch_signature.vars[var_index].ty;
+        &branch_signature.vars[var_index].ty
+    }
 
-        self.sierra_context.program_registry_info.registry.get_type(var_type).unwrap().info()
+    #[expect(dead_code)]
+    pub fn type_size(&self, type_id: &ConcreteTypeId) -> i16 {
+        *self
+            .sierra_context
+            .program_registry_info
+            .type_sizes
+            .get(type_id)
+            .expect("type id is expected to exist in type size map")
     }
 
     fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
