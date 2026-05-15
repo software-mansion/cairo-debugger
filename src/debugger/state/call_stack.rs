@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::iter;
 use std::path::Path;
 
@@ -17,9 +18,13 @@ use crate::debugger::state::call_stack::variables::get_values_of_variables;
 
 mod variables;
 
+pub use variables::CairoValue;
+
 type SubStack = Vec<(StackFrame, FunctionVariables)>;
 
-#[derive(Default)]
+/// Nested variable references start above any realistic frame scope reference value.
+const NESTED_VAR_REF_START: i64 = 100_000;
+
 pub struct CallStack {
     /// Stack of Cairo function frames and values of variables in frames corresponding
     /// to these functions.
@@ -55,6 +60,28 @@ pub struct CallStack {
     /// statement maps to a function call or a return statement.
     /// The stack should be modified ***after*** such a statement is executed.
     action_on_new_statement: Option<Action>,
+
+    /// Registry mapping DAP `variables_reference` values to their child variables.
+    /// Used for expanding nested struct/enum values in the IDE.
+    /// Only entries for the current function frame are cleared on each new Sierra statement.
+    nested_var_registry: HashMap<i64, Vec<(String, CairoValue)>>,
+
+    /// Counter for assigning nested variable reference IDs.
+    /// Starts at [`NESTED_VAR_REF_START`] and is reset to the current frame's boundary each step,
+    /// reclaiming IDs for the current frame (uniqueness is only required within a stopped state).
+    next_nested_ref: i64,
+}
+
+impl Default for CallStack {
+    fn default() -> Self {
+        Self {
+            call_frames_and_vars: Default::default(),
+            current_sierra_function_context: Default::default(),
+            action_on_new_statement: Default::default(),
+            nested_var_registry: Default::default(),
+            next_nested_ref: NESTED_VAR_REF_START,
+        }
+    }
 }
 
 impl CallStack {
@@ -74,9 +101,14 @@ impl CallStack {
                     std::mem::take(&mut self.current_sierra_function_context);
 
                 self.call_frames_and_vars.push((frames_and_variables, sierra_function_context));
+                self.current_sierra_function_context.nested_ref_start = self.next_nested_ref;
             }
             Some(Action::Pop) => {
                 if let Some((_, sierra_function_context)) = self.call_frames_and_vars.pop() {
+                    let start = sierra_function_context.nested_ref_start;
+                    self.nested_var_registry.retain(|&k, _| k < start);
+                    self.next_nested_ref = start;
+
                     self.current_sierra_function_context = sierra_function_context;
                 }
             }
@@ -95,19 +127,22 @@ impl CallStack {
             return;
         }
 
+        // Invalidate only the current function's entries: keys below nested_ref_start
+        // belong to past (caller) frames whose variables are fixed and can remain cached.
+        // Reset the counter to reclaim those IDs — uniqueness is only required within a single
+        // stopped state, not across the whole session.
+        let start = self.current_sierra_function_context.nested_ref_start;
+        self.nested_var_registry.retain(|&k, _| k < start);
+        self.next_nested_ref = start;
+
         self.current_sierra_function_context.handle_branch_entrances(statement_idx, ctx, vm);
         self.current_sierra_function_context.last_executed_statement = Some(statement_idx);
 
         if ctx.is_function_call_statement(statement_idx) {
             let frames: Vec<_> = self.build_stack_frames(ctx, statement_idx).collect();
             // TODO(#95): handle variables of inlined functions.
-            let vars = iter::repeat_n(FunctionVariables::default(), frames.len() - 1).chain(
-                iter::once(get_values_of_variables(
-                    ctx,
-                    vm,
-                    &self.current_sierra_function_context.post_statements_registers,
-                )),
-            );
+            let vars = iter::repeat_n(FunctionVariables::default(), frames.len() - 1)
+                .chain(iter::once(self.get_current_function_variables(ctx, vm)));
 
             let frames_and_vars = frames.into_iter().zip(vars).collect();
 
@@ -139,25 +174,38 @@ impl CallStack {
         vec![scope]
     }
 
-    pub fn get_variables(
+    /// Returns the semantic variable values for the current function without modifying
+    /// the nested variable registry or incrementing reference counters.
+    pub fn get_current_function_variables(
         &self,
-        requested_variables: RequestedVariables,
+        ctx: &Context,
+        vm: &VirtualMachine,
+    ) -> FunctionVariables {
+        get_values_of_variables(
+            ctx,
+            vm,
+            &self.current_sierra_function_context.post_statements_registers,
+        )
+    }
+
+    pub fn get_variables(
+        &mut self,
+        variables_reference: i64,
         ctx: &Context,
         vm: &VirtualMachine,
     ) -> Vec<Variable> {
-        let flat_index = match requested_variables {
-            RequestedVariables::CurrentFunction => self.flat_length(),
-            RequestedVariables::VariablesReference(variables_reference) => {
-                (variables_reference / 2 - 1) as usize
-            }
-        };
+        // Check the nested registry first (handles expansion of struct/enum children).
+        if let Some(children) = self.nested_var_registry.get(&variables_reference).cloned() {
+            return children
+                .into_iter()
+                .map(|(name, value)| self.cairo_value_to_variable(name, value))
+                .collect();
+        }
+
+        let flat_index = (variables_reference / 2 - 1) as usize;
 
         let FunctionVariables { names_to_values } = if flat_index >= self.flat_length() {
-            get_values_of_variables(
-                ctx,
-                vm,
-                &self.current_sierra_function_context.post_statements_registers,
-            )
+            self.get_current_function_variables(ctx, vm)
         } else {
             self.call_frames_and_vars
                 .iter()
@@ -170,13 +218,85 @@ impl CallStack {
 
         names_to_values
             .into_iter()
-            .map(|(name, value)| Variable {
+            .map(|(name, value)| self.cairo_value_to_variable(name, value))
+            .collect()
+    }
+
+    fn cairo_value_to_variable(&mut self, name: String, value: CairoValue) -> Variable {
+        match value {
+            CairoValue::FeltLike(value) => Variable {
                 name,
-                value,
+                value: value.to_string(),
                 variables_reference: 0,
                 ..Default::default()
-            })
-            .collect()
+            },
+            CairoValue::Struct { type_name, fields } => {
+                if fields.is_empty() {
+                    Variable {
+                        name,
+                        value: "()".to_string(),
+                        variables_reference: 0,
+                        ..Default::default()
+                    }
+                } else {
+                    let ref_id = self.register_children(fields);
+                    Variable {
+                        name,
+                        value: type_name,
+                        variables_reference: ref_id,
+                        ..Default::default()
+                    }
+                }
+            }
+            CairoValue::Tuple { fields } => {
+                if fields.is_empty() {
+                    Variable {
+                        name,
+                        value: "()".to_string(),
+                        variables_reference: 0,
+                        ..Default::default()
+                    }
+                } else {
+                    let ref_id = self.register_children(fields);
+                    Variable {
+                        name,
+                        value: "(...)".to_string(),
+                        variables_reference: ref_id,
+                        ..Default::default()
+                    }
+                }
+            }
+            CairoValue::Enum { type_name, variant_name, variant_value } => {
+                let display_name = format!("{type_name}::{variant_name}");
+                let ref_id = self.register_children(vec![("value".to_string(), *variant_value)]);
+                Variable {
+                    name,
+                    value: display_name,
+                    variables_reference: ref_id,
+                    ..Default::default()
+                }
+            }
+            CairoValue::Other(value) => {
+                Variable { name, value, variables_reference: 0, ..Default::default() }
+            }
+            CairoValue::Snapshot(value) => {
+                let variable = self.cairo_value_to_variable(name, *value);
+                Variable { value: format!("@{}", variable.value), ..variable }
+            }
+            CairoValue::NonZero(value) => {
+                let variable = self.cairo_value_to_variable(name, *value);
+                Variable { value: format!("NonZero({})", variable.value), ..variable }
+            }
+        }
+    }
+
+    fn register_children(&mut self, children: Vec<(String, CairoValue)>) -> i64 {
+        let ref_id = self.next_nested_ref;
+        self.nested_var_registry.insert(ref_id, children);
+
+        self.next_nested_ref += 1;
+
+        ref_id
     }
 
     /// Builds a vector of stack frames, ordered from the least nested to the most nested element.
@@ -260,7 +380,6 @@ impl CallStack {
 type PostStatementsRegisters =
     IndexMap<StatementIdx, (GenBranchTarget<StatementIdx>, RegistersValues)>;
 
-#[derive(Default)]
 struct SierraFunctionContext {
     /// Mapping from sierra statements executed during the function frame execution to values of registers
     /// right after entering any branch of the statement (by definition only one branch is entered)
@@ -274,6 +393,20 @@ struct SierraFunctionContext {
     post_statements_registers: PostStatementsRegisters,
 
     last_executed_statement: Option<StatementIdx>,
+
+    /// The lowest `nested_var_registry` key that belongs to this function frame.
+    /// Entries with keys >= this value are cleared when execution moves to a new statement.
+    nested_ref_start: i64,
+}
+
+impl Default for SierraFunctionContext {
+    fn default() -> Self {
+        Self {
+            post_statements_registers: Default::default(),
+            last_executed_statement: Default::default(),
+            nested_ref_start: NESTED_VAR_REF_START,
+        }
+    }
 }
 
 impl SierraFunctionContext {
@@ -360,14 +493,9 @@ enum Action {
     Pop,
 }
 
-#[derive(Default, Clone)]
-struct FunctionVariables {
-    names_to_values: IndexMap<String, String>,
-}
-
-pub enum RequestedVariables {
-    CurrentFunction,
-    VariablesReference(i64),
+#[derive(Default, Clone, PartialEq)]
+pub struct FunctionVariables {
+    names_to_values: IndexMap<String, CairoValue>,
 }
 
 #[derive(Clone, Debug)]
