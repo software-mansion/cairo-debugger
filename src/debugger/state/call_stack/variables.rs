@@ -2,7 +2,7 @@ use cairo_annotations::annotations::coverage::SourceCodeSpan;
 use cairo_lang_casm::cell_expression::{CellExpression, CellOperator};
 use cairo_lang_casm::operand::{CellRef, DerefOrImmediate};
 use cairo_lang_sierra::ids::VarId;
-use cairo_lang_sierra::program::{ConcreteTypeLongId, GenericArg};
+use cairo_lang_sierra::program::{ConcreteTypeLongId, GenericArg, Statement};
 use cairo_vm::Felt252;
 use cairo_vm::vm::vm_core::VirtualMachine;
 use indexmap::IndexMap;
@@ -11,7 +11,7 @@ use tracing::{error, warn};
 
 use crate::debugger::context::{CairoVarId, CairoVarReference, Context};
 use crate::debugger::state::call_stack::{
-    FunctionVariables, PostStatementsRegisters, RegistersValues,
+    FunctionVariables, PostStatementsRegisters, RegistersValues, SierraFunctionContext,
 };
 
 pub fn get_values_of_variables(
@@ -86,6 +86,43 @@ pub fn get_values_of_variables(
         .collect();
 
     FunctionVariables { names_to_values }
+}
+
+pub fn get_values_of_function_params(
+    ctx: &Context,
+    vm: &VirtualMachine,
+    caller_context: &SierraFunctionContext,
+    registers_on_call: &RegistersValues,
+) -> Option<IndexMap<String, String>> {
+    // "Caller" is the function that invoked the current function.
+    // Last executed statement of the caller is the invocation of the current function.
+    let invocation_statement_idx = caller_context.last_executed_statement?;
+
+    let Statement::Invocation(invocation_statement) =
+        ctx.statement_idx_to_statement(invocation_statement_idx)
+    else {
+        return None;
+    };
+
+    let user_function_id =
+        ctx.user_function_for_concrete_libfunc(&invocation_statement.libfunc_id)?;
+    let params = ctx.function_param_var_map.get(&user_function_id)?;
+
+    let result: IndexMap<_, _> = params
+        .iter()
+        .map(|(CairoVarId { name, .. }, CairoVarReference { ref_expr, .. })| {
+            let val = ref_expr
+                .cells
+                .iter()
+                .filter_map(|cell| maybe_extract_felt_from_cell(cell, registers_on_call, vm))
+                .next()
+                .unwrap_or_default();
+
+            (name.to_owned(), val.to_string())
+        })
+        .collect();
+
+    Some(result)
 }
 
 fn is_panic_result(type_long_id: &ConcreteTypeLongId) -> bool {
