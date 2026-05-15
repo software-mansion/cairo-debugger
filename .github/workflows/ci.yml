@@ -23,7 +23,7 @@ jobs:
       - run: cargo test --release
 
   check:
-    name: Check formatting, linter and unused dependencies
+    name: Check formatting, linter, docs and unused dependencies
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

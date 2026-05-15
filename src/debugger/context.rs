@@ -11,8 +11,11 @@ use cairo_annotations::annotations::debugger::DebuggerAnnotationsV1 as Functions
 use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
+use cairo_annotations::annotations::type_names::{
+    EnumInfo, SierraTypeId, StructInfo, TypeNamesAnnotationsV1 as TypeNames,
+};
 use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
-use cairo_lang_sierra::extensions::core::CoreConcreteLibfunc;
+use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreTypeConcrete};
 use cairo_lang_sierra::extensions::lib_func::BranchSignature;
 use cairo_lang_sierra::extensions::types::TypeInfo;
 use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType};
@@ -52,6 +55,7 @@ struct SierraContext {
     program_registry_info: ProgramRegistryInfo,
     code_locations: SierraCodeLocations,
     function_names: SierraFunctionNames,
+    type_names: Option<TypeNames>,
 }
 
 impl Context {
@@ -75,6 +79,7 @@ impl Context {
         let function_names = SierraFunctionNames::try_from_debug_info(&debug_info).context(
             "statements functions debug info is missing - enable generating it in your Scarb.toml",
         )?;
+        let type_names = TypeNames::try_from_debug_info(&debug_info).ok();
 
         // TODO(#61)
         let casm_debug_info =
@@ -87,8 +92,13 @@ impl Context {
         #[cfg(feature = "dev")]
         let labels = readable_sierra_ids::extract_labels(&program);
 
-        let sierra_context =
-            SierraContext { program, program_registry_info, code_locations, function_names };
+        let sierra_context = SierraContext {
+            program,
+            program_registry_info,
+            code_locations,
+            function_names,
+            type_names,
+        };
 
         Ok(Self {
             #[cfg(feature = "dev")]
@@ -233,14 +243,25 @@ impl Context {
         &branch_signature.vars[var_index].ty
     }
 
-    #[expect(dead_code)]
-    pub fn type_size(&self, type_id: &ConcreteTypeId) -> i16 {
+    pub fn type_size(&self, type_id: &ConcreteTypeId) -> usize {
         *self
             .sierra_context
             .program_registry_info
             .type_sizes
             .get(type_id)
-            .expect("type id is expected to exist in type size map")
+            .expect("type id is expected to exist in type size map") as usize
+    }
+
+    pub fn get_concrete_type(&self, type_id: &ConcreteTypeId) -> Option<&CoreTypeConcrete> {
+        self.sierra_context.program_registry_info.registry().get_type(type_id).ok()
+    }
+
+    pub fn struct_info(&self, type_id: &ConcreteTypeId) -> Option<&StructInfo> {
+        self.sierra_context.type_names.as_ref()?.structs.get(&SierraTypeId(type_id.id))
+    }
+
+    pub fn enum_info(&self, type_id: &ConcreteTypeId) -> Option<&EnumInfo> {
+        self.sierra_context.type_names.as_ref()?.enums.get(&SierraTypeId(type_id.id))
     }
 
     fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
