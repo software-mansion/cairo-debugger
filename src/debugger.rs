@@ -43,12 +43,16 @@ impl CairoDebugger {
 
     fn initialize(&mut self) -> Result<()> {
         while !self.state.is_configuration_done() {
-            // TODO(#35)
             let request = self.connection.next_request()?;
-            self.process_request(request, None)?;
+            self.process_init_request(request)?;
         }
 
         Ok(())
+    }
+
+    fn process_init_request(&mut self, request: Request) -> Result<()> {
+        let response = handler::handle_init_request(&request, &mut self.state, &self.ctx)?;
+        self.send_response(request, response)
     }
 
     fn sync_with_vm_pre_step(&mut self, vm: &VirtualMachine) -> Result<()> {
@@ -60,7 +64,7 @@ impl CairoDebugger {
         self.maybe_handle_step_action(vm)?;
 
         while let Some(request) = self.connection.try_next_request()? {
-            self.process_request(request, Some(vm))?;
+            self.process_request(request, vm)?;
 
             if self.state.is_execution_stopped() {
                 self.process_until_resume(vm)?;
@@ -77,14 +81,22 @@ impl CairoDebugger {
     fn process_until_resume(&mut self, vm: &VirtualMachine) -> Result<()> {
         while self.state.is_execution_stopped() {
             let request = self.connection.next_request()?;
-            self.process_request(request, Some(vm))?;
+            self.process_request(request, vm)?;
         }
 
         Ok(())
     }
 
-    fn process_request(&mut self, request: Request, vm: Option<&VirtualMachine>) -> Result<()> {
+    fn process_request(&mut self, request: Request, vm: &VirtualMachine) -> Result<()> {
         let response = handler::handle_request(&request, &mut self.state, &self.ctx, vm)?;
+        self.send_response(request, response)
+    }
+
+    fn send_response(
+        &mut self,
+        request: Request,
+        response: handler::HandlerResponse,
+    ) -> Result<()> {
         let disconnected = matches!(response.response_body, ResponseBody::Disconnect);
 
         if let Some(event) = response.event {
