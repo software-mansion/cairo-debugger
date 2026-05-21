@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use cairo_vm::vm::vm_core::VirtualMachine;
 use dap::events::{Event, StoppedEventBody};
 use dap::prelude::{Command, Request, ResponseBody};
-use dap::requests::{NextArguments, StepInArguments};
+use dap::requests::{NextArguments, SetBreakpointsArguments, StepInArguments};
 use dap::requests::{ScopesArguments, VariablesArguments};
 use dap::responses::{
     ContinueResponse, EvaluateResponse, ScopesResponse, SetBreakpointsResponse,
@@ -40,13 +40,48 @@ impl HandlerResponse {
     }
 }
 
+pub fn handle_init_request(
+    request: &Request,
+    state: &mut State,
+    ctx: &Context,
+) -> Result<HandlerResponse> {
+    match &request.command {
+        Command::Initialize(args) => {
+            trace!("Initialized a client: {:?}", args.client_name);
+            Ok(HandlerResponse::from(ResponseBody::Initialize(Capabilities {
+                supports_configuration_done_request: Some(true),
+                ..Default::default()
+            }))
+            .with_event(Event::Initialized))
+        }
+        Command::ConfigurationDone => {
+            // Start running the Cairo program here.
+            state.set_configuration_done();
+            Ok(ResponseBody::ConfigurationDone.into())
+        }
+        // For some reason VSCode sens launch request during initalize sequence.
+        Command::Launch(_) => Ok(ResponseBody::Launch.into()),
+        Command::SetBreakpoints(args) => handle_set_breakpoints(args, state, ctx),
+        Command::SetExceptionBreakpoints(_) => handle_set_exception_breakpoints_ignored(),
+        _ => {
+            error!("Received unexpected request during initialization: {request:?}");
+            bail!("Unexpected request during initialization");
+        }
+    }
+}
+
 pub fn handle_request(
     request: &Request,
     state: &mut State,
     ctx: &Context,
-    vm: Option<&VirtualMachine>,
+    vm: &VirtualMachine,
 ) -> Result<HandlerResponse> {
     match &request.command {
+        // Init-only requests that must not appear after initialization.
+        Command::Initialize(_) | Command::ConfigurationDone => {
+            error!("Received initialization request after initialization: {request:?}");
+            bail!("Initialization request received after initialization");
+        }
         // We have not yet decided if we want to support these.
         Command::Attach(_)
         | Command::ReverseContinue(_)
@@ -77,35 +112,8 @@ pub fn handle_request(
             error!("Received unsupported request: {request:?}");
             bail!("Unsupported request");
         }
-        Command::SetExceptionBreakpoints(_) => {
-            // VS Code sometimes sends this request based on old user settings,
-            // even if we disabled the feature in our initialization.
-            //
-            // We reply with "success" to keep the debug session running smoothly,
-            // but we intentionally ignore the request and set no breakpoints.
-
-            trace!("Ignoring SetExceptionBreakpoints request (feature disabled)");
-            Ok(ResponseBody::SetExceptionBreakpoints(SetExceptionBreakpointsResponse {
-                breakpoints: None,
-            })
-            .into())
-        }
-
-        // Initialize flow requests.
-        Command::Initialize(args) => {
-            trace!("Initialized a client: {:?}", args.client_name);
-            Ok(HandlerResponse::from(ResponseBody::Initialize(Capabilities {
-                supports_configuration_done_request: Some(true),
-                ..Default::default()
-            }))
-            .with_event(Event::Initialized))
-        }
         Command::Launch(_) => Ok(ResponseBody::Launch.into()),
-        Command::ConfigurationDone => {
-            // Start running the Cairo program here.
-            state.set_configuration_done();
-            Ok(ResponseBody::ConfigurationDone.into())
-        }
+        Command::SetExceptionBreakpoints(_) => handle_set_exception_breakpoints_ignored(),
 
         Command::Pause(_) => {
             state.stop_execution();
@@ -127,35 +135,7 @@ pub fn handle_request(
                 .into())
         }
 
-        Command::SetBreakpoints(args) => {
-            let mut response_bps = Vec::new();
-            if let Some(requested_bps) = &args.breakpoints {
-                let source_path = args
-                    .source
-                    .path
-                    .clone()
-                    .ok_or_else(|| anyhow!("Source file path is missing"))?;
-
-                state.clear_breakpoints(&source_path);
-
-                for bp in requested_bps {
-                    let is_valid = state.verify_and_set_breakpoint(
-                        source_path.clone(),
-                        // UI sends line numbers as 1-indexed, hence we subtract 1 here.
-                        Line::new((bp.line - 1) as usize),
-                        ctx,
-                    );
-                    response_bps.push(Breakpoint {
-                        verified: is_valid,
-                        source: Some(args.source.clone()),
-                        line: Some(bp.line),
-                        ..Default::default()
-                    });
-                }
-            }
-            Ok(ResponseBody::SetBreakpoints(SetBreakpointsResponse { breakpoints: response_bps })
-                .into())
-        }
+        Command::SetBreakpoints(args) => handle_set_breakpoints(args, state, ctx),
 
         Command::Threads => {
             Ok(ResponseBody::Threads(ThreadsResponse {
@@ -177,7 +157,7 @@ pub fn handle_request(
             let variables = state.call_stack.get_variables(
                 RequestedVariables::VariablesReference(*variables_reference),
                 ctx,
-                vm.unwrap(),
+                vm,
             );
             Ok(ResponseBody::Variables(VariablesResponse { variables }).into())
         }
@@ -243,4 +223,45 @@ pub fn handle_request(
 
         Command::Disconnect(_) => Ok(ResponseBody::Disconnect.into()),
     }
+}
+
+fn handle_set_breakpoints(
+    args: &SetBreakpointsArguments,
+    state: &mut State,
+    ctx: &Context,
+) -> Result<HandlerResponse> {
+    let mut response_bps = Vec::new();
+    if let Some(requested_bps) = &args.breakpoints {
+        let source_path =
+            args.source.path.clone().ok_or_else(|| anyhow!("Source file path is missing"))?;
+
+        state.clear_breakpoints(&source_path);
+
+        for bp in requested_bps {
+            let is_valid = state.verify_and_set_breakpoint(
+                source_path.clone(),
+                // UI sends line numbers as 1-indexed, hence we subtract 1 here.
+                Line::new((bp.line - 1) as usize),
+                ctx,
+            );
+            response_bps.push(Breakpoint {
+                verified: is_valid,
+                source: Some(args.source.clone()),
+                line: Some(bp.line),
+                ..Default::default()
+            });
+        }
+    }
+    Ok(ResponseBody::SetBreakpoints(SetBreakpointsResponse { breakpoints: response_bps }).into())
+}
+
+fn handle_set_exception_breakpoints_ignored() -> Result<HandlerResponse> {
+    // VS Code sometimes sends this request based on old user settings,
+    // even if we disabled the feature in our initialization.
+    //
+    // We reply with "success" to keep the debug session running smoothly,
+    // but we intentionally ignore the request and set no breakpoints.
+    trace!("Ignoring SetExceptionBreakpoints request (feature disabled)");
+    Ok(ResponseBody::SetExceptionBreakpoints(SetExceptionBreakpointsResponse { breakpoints: None })
+        .into())
 }
