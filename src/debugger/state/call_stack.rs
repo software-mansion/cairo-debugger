@@ -13,7 +13,9 @@ use indexmap::IndexMap;
 
 use crate::debugger::MIN_OBJECT_REFERENCE;
 use crate::debugger::context::Context;
-use crate::debugger::state::call_stack::variables::get_values_of_variables;
+use crate::debugger::state::call_stack::variables::{
+    get_values_of_function_params, get_values_of_variables,
+};
 
 mod variables;
 
@@ -152,12 +154,29 @@ impl CallStack {
             }
         };
 
-        let FunctionVariables { names_to_values } = if flat_index >= self.flat_length() {
-            get_values_of_variables(
+        let names_to_values = if flat_index >= self.flat_length() {
+            let mut current_function_variables = get_values_of_variables(
                 ctx,
                 vm,
                 &self.current_sierra_function_context.post_statements_registers,
             )
+            .names_to_values;
+
+            let mut current_function_params =
+                if let Some((_, caller_context)) = self.call_frames_and_vars.last() {
+                    // Snapshot of VM registers right after function call that invoked the current function.
+                    // (or eqivalently: right before the execution of the first statement in this function).
+                    // Access to function params in VM's memory is based only on FP, which is fixed for each function execution.
+                    let register_values_on_call = RegistersValues { ap: 0, fp: vm.get_fp().offset };
+
+                    get_values_of_function_params(ctx, vm, caller_context, &register_values_on_call)
+                        .unwrap_or_default()
+                } else {
+                    Default::default()
+                };
+
+            current_function_params.append(&mut current_function_variables);
+            current_function_params
         } else {
             self.call_frames_and_vars
                 .iter()
@@ -166,6 +185,7 @@ impl CallStack {
                 .nth(flat_index)
                 .unwrap()
                 .clone()
+                .names_to_values
         };
 
         names_to_values

@@ -7,18 +7,20 @@ use cairo_annotations::annotations::TryFromDebugInfo;
 use cairo_annotations::annotations::coverage::{
     CodeLocation, CoverageAnnotationsV1 as SierraCodeLocations,
 };
-use cairo_annotations::annotations::debugger::DebuggerAnnotationsV1 as FunctionsDebugInfo;
+use cairo_annotations::annotations::debugger::VersionedDebuggerAnnotations;
 use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
 use cairo_annotations::{MappingResult, map_pc_to_sierra_statement_id};
 use cairo_lang_sierra::extensions::core::CoreConcreteLibfunc;
+use cairo_lang_sierra::extensions::function_call::FunctionCallLibfunc;
 use cairo_lang_sierra::extensions::lib_func::BranchSignature;
 use cairo_lang_sierra::extensions::types::TypeInfo;
-use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType};
-use cairo_lang_sierra::ids::{ConcreteTypeId, VarId};
+use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType, GenericLibfunc};
+use cairo_lang_sierra::ids::{ConcreteLibfuncId, ConcreteTypeId, FunctionId, VarId};
 use cairo_lang_sierra::program::{
-    Function, GenBranchTarget, GenInvocation, Program, ProgramArtifact, Statement, StatementIdx,
+    Function, GenBranchTarget, GenInvocation, GenericArg, Program, ProgramArtifact, Statement,
+    StatementIdx,
 };
 use cairo_lang_sierra_to_casm::compiler::{CairoProgramDebugInfo, SierraToCasmConfig};
 use cairo_lang_sierra_to_casm::metadata::calc_metadata;
@@ -26,7 +28,7 @@ use cairo_lang_sierra_type_size::ProgramRegistryInfo;
 use scarb_metadata::MetadataCommand;
 
 use crate::debugger::context::file_locations::{FileCodeLocationsData, build_file_locations_map};
-use crate::debugger::context::variables::build_cairo_var_to_casm_map;
+use crate::debugger::context::variables::{CairoVarToCasmMaps, build_cairo_var_to_casm_maps};
 
 mod file_locations;
 #[cfg(feature = "dev")]
@@ -43,6 +45,7 @@ pub struct Context {
     casm_debug_info: CairoProgramDebugInfo,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
     pub cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
+    pub function_param_var_map: HashMap<FunctionId, HashMap<CairoVarId, CairoVarReference>>,
     #[cfg(feature = "dev")]
     labels: HashMap<usize, String>,
 }
@@ -64,14 +67,27 @@ impl Context {
         let program_registry_info =
             ProgramRegistryInfo::new(&program).context("creating program registry failed")?;
 
+        eprintln!("{program}");
+
         let debug_info = sierra_program.debug_info.ok_or_else(|| {
             anyhow!("sierra debug info is missing - enable generating it in your Scarb.toml")
         })?;
 
         let code_locations = SierraCodeLocations::try_from_debug_info(&debug_info)
             .context("statements code locations debug info is missing - enable generating it in your Scarb.toml")?;
-        let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)
-            .context("functions debug info is missing - enable generating it in your Scarb.toml")?;
+        let functions_debug_info =
+            match VersionedDebuggerAnnotations::try_from_debug_info(&debug_info).context(
+                "functions debug info is missing - enable generating it in your Scarb.toml",
+            )? {
+                VersionedDebuggerAnnotations::V2(v2) => v2,
+                VersionedDebuggerAnnotations::V1(_) => {
+                    return Err(anyhow!(
+                        "this project was compiled with a toolchain that predates the \
+                         multi-binding debug info format; rebuild with an up-to-date scarb \
+                         to enable variable display"
+                    ));
+                }
+            };
         let function_names = SierraFunctionNames::try_from_debug_info(&debug_info).context(
             "statements functions debug info is missing - enable generating it in your Scarb.toml",
         )?;
@@ -79,8 +95,16 @@ impl Context {
         // TODO(#61)
         let casm_debug_info =
             compile_sierra_to_get_casm_debug_info(&program, &program_registry_info)?;
-        let cairo_var_map =
-            build_cairo_var_to_casm_map(&program, &casm_debug_info, functions_debug_info);
+
+        let CairoVarToCasmMaps {
+            local_vars: cairo_var_map,
+            function_params: function_param_var_map,
+        } = build_cairo_var_to_casm_maps(
+            &program,
+            &casm_debug_info,
+            &functions_debug_info,
+            &program_registry_info.type_sizes,
+        );
 
         let files_data = build_file_locations_map(&casm_debug_info, &code_locations);
 
@@ -99,6 +123,7 @@ impl Context {
             casm_debug_info,
             files_data,
             cairo_var_map,
+            function_param_var_map,
         })
     }
 
@@ -106,6 +131,28 @@ impl Context {
         match map_pc_to_sierra_statement_id(&self.casm_debug_info.sierra_statement_info, pc, 0) {
             MappingResult::SierraStatementIdx(idx) => Some(idx),
             MappingResult::Header | MappingResult::PcOutOfFunctionArea => None,
+        }
+    }
+
+    pub fn user_function_for_concrete_libfunc(
+        &self,
+        concrete_libfunc_id: &ConcreteLibfuncId,
+    ) -> Option<FunctionId> {
+        let libfunc_long_id = &self
+            .sierra_context
+            .program
+            .libfunc_declarations
+            .iter()
+            .find(|libfunc_declaration| &libfunc_declaration.id == concrete_libfunc_id)?
+            .long_id;
+
+        FunctionCallLibfunc::by_id(&libfunc_long_id.generic_id)?;
+
+        match &libfunc_long_id.generic_args[..] {
+            [GenericArg::UserFunc(function_id)] => Some(function_id.clone()),
+            _ => unreachable!(
+                "function_call libfunc is expected to have exactly one generic arg of type user function"
+            ),
         }
     }
 
@@ -243,7 +290,7 @@ impl Context {
             .expect("type id is expected to exist in type size map")
     }
 
-    fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
+    pub fn statement_idx_to_statement(&self, statement_idx: StatementIdx) -> &Statement {
         &self.sierra_context.program.statements[statement_idx.0]
     }
 
