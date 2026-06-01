@@ -2,6 +2,7 @@ use cairo_annotations::annotations::coverage::SourceCodeSpan;
 use cairo_lang_casm::cell_expression::{CellExpression, CellOperator};
 use cairo_lang_casm::operand::{CellRef, DerefOrImmediate};
 use cairo_lang_sierra::extensions::core::CoreTypeConcrete;
+use cairo_lang_sierra::extensions::modules::starknet::StarknetTypeConcrete;
 use cairo_lang_sierra::ids::ConcreteTypeId;
 use cairo_lang_sierra::program::{ConcreteTypeLongId, GenericArg};
 use cairo_vm::Felt252;
@@ -17,9 +18,13 @@ use crate::debugger::state::call_stack::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CairoValue {
+    Bool(bool),
     FeltLike(Felt252),
     Struct { type_name: String, fields: Vec<(String, CairoValue)> },
     Enum { type_name: String, variant_name: String, variant_value: Box<CairoValue> },
+    Tuple(Vec<CairoValue>),
+    Snapshot(Box<CairoValue>),
+    NonZero(Box<CairoValue>),
     Other(String),
 }
 
@@ -114,30 +119,40 @@ fn felts_to_cairo_value(felts: &[Felt252], type_id: &ConcreteTypeId, ctx: &Conte
 
     match concrete_type {
         CoreTypeConcrete::Struct(struct_type) => {
-            let struct_info = ctx.struct_info(type_id);
-            let type_name = struct_info
-                .map(|info| info.name.clone())
-                .unwrap_or_else(|| extract_short_type_name(type_id));
-            let mut offset = 0;
-            let fields = struct_type
-                .members
-                .iter()
-                .enumerate()
-                .map(|(i, concrete_type_id)| {
-                    let size = ctx.type_size(concrete_type_id);
-                    let member_felts = &felts[offset..offset + size];
-                    offset += size;
-                    let value = felts_to_cairo_value(member_felts, concrete_type_id, ctx);
-                    let field_name = struct_info
+            let type_long_id = &ctx.var_type_info(type_id).long_id;
+
+            if is_tuple(type_long_id) {
+                let fields =
+                    collect_member_fields(&struct_type.members, felts, ctx, |_| String::new())
+                        .into_iter()
+                        .map(|(_, v)| v)
+                        .collect();
+                CairoValue::Tuple(fields)
+            } else {
+                let struct_info = ctx.struct_info(type_id);
+                let type_name = struct_info
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| extract_short_type_name(type_id));
+                let fields = collect_member_fields(&struct_type.members, felts, ctx, |i| {
+                    struct_info
                         .and_then(|info| info.members.get(i))
                         .cloned()
-                        .unwrap_or_else(|| format!(".{i}"));
-                    (field_name, value)
-                })
-                .collect();
-            CairoValue::Struct { type_name, fields }
+                        .unwrap_or_else(|| format!(".{i}"))
+                });
+                CairoValue::Struct { type_name, fields }
+            }
         }
         CoreTypeConcrete::Enum(enum_type) => {
+            let type_long_id = &ctx.var_type_info(type_id).long_id;
+            if is_bool(type_long_id) {
+                let stored_discriminant: usize = felts[0]
+                    .as_ref()
+                    .to_biguint()
+                    .try_into()
+                    .expect("bool discriminant larger than usize::MAX");
+                return CairoValue::Bool(stored_discriminant != 0);
+            }
+
             let enum_info = ctx.enum_info(type_id);
             let type_name = enum_info
                 .map(|info| info.name.clone())
@@ -170,6 +185,25 @@ fn felts_to_cairo_value(felts: &[Felt252], type_id: &ConcreteTypeId, ctx: &Conte
                 .unwrap_or_else(|| format!("variant_{variant_index}"));
             CairoValue::Enum { type_name, variant_name, variant_value: Box::new(variant_value) }
         }
+        CoreTypeConcrete::NonZero(inner) => {
+            CairoValue::NonZero(felts_to_cairo_value(felts, &inner.ty, ctx).into())
+        }
+        CoreTypeConcrete::Snapshot(inner) => {
+            CairoValue::Snapshot(felts_to_cairo_value(felts, &inner.ty, ctx).into())
+        }
+        CoreTypeConcrete::Starknet(starknet_type) => {
+            let type_name = match starknet_type {
+                StarknetTypeConcrete::ContractAddress(_) => Some("ContractAddress"),
+                StarknetTypeConcrete::ClassHash(_) => Some("ClassHash"),
+                StarknetTypeConcrete::StorageAddress(_) => Some("StorageAddress"),
+                StarknetTypeConcrete::StorageBaseAddress(_) => Some("StorageBaseAddress"),
+                _ => None,
+            };
+            match type_name {
+                Some(name) => CairoValue::Other(format!("{name}(0x{:x})", felts[0].to_biguint())),
+                None => fallback_value(felts, type_id),
+            }
+        }
         _ => fallback_value(felts, type_id),
     }
 }
@@ -191,6 +225,47 @@ fn extract_short_type_name(type_id: &ConcreteTypeId) -> String {
         return base.split("::").last().unwrap_or(base).to_string();
     }
     format!("type_{}", type_id.id)
+}
+
+fn collect_member_fields<F>(
+    members: &[ConcreteTypeId],
+    felts: &[Felt252],
+    ctx: &Context,
+    name_fn: F,
+) -> Vec<(String, CairoValue)>
+where
+    F: Fn(usize) -> String,
+{
+    let mut offset = 0;
+    members
+        .iter()
+        .enumerate()
+        .map(|(i, concrete_type_id)| {
+            let size = ctx.type_size(concrete_type_id);
+            let member_felts = &felts[offset..offset + size];
+            offset += size;
+            let value = felts_to_cairo_value(member_felts, concrete_type_id, ctx);
+            (name_fn(i), value)
+        })
+        .collect()
+}
+
+fn is_tuple(type_long_id: &ConcreteTypeLongId) -> bool {
+    type_long_id.generic_id.0 == "Struct"
+        && matches!(
+            type_long_id.generic_args.first(),
+            Some(GenericArg::UserType(user_type))
+                if user_type.debug_name.as_ref().is_some_and(|n| n.as_str() == "Tuple")
+        )
+}
+
+fn is_bool(type_long_id: &ConcreteTypeLongId) -> bool {
+    type_long_id.generic_id.0 == "Enum"
+        && matches!(
+            type_long_id.generic_args.first(),
+            Some(GenericArg::UserType(user_type))
+                if user_type.debug_name.as_ref().is_some_and(|n| n.as_str() == "core::bool")
+        )
 }
 
 fn is_panic_result(type_long_id: &ConcreteTypeLongId) -> bool {

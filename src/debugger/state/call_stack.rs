@@ -224,6 +224,12 @@ impl CallStack {
 
     fn cairo_value_to_variable(&mut self, name: String, value: CairoValue) -> Variable {
         match value {
+            CairoValue::Bool(value) => Variable {
+                name,
+                value: value.to_string(),
+                variables_reference: 0,
+                ..Default::default()
+            },
             CairoValue::FeltLike(value) => Variable {
                 name,
                 value: value.to_string(),
@@ -248,6 +254,26 @@ impl CallStack {
                     }
                 }
             }
+            CairoValue::Tuple(fields) => {
+                if fields.is_empty() {
+                    Variable {
+                        name,
+                        value: "()".to_string(),
+                        variables_reference: 0,
+                        ..Default::default()
+                    }
+                } else {
+                    let children =
+                        fields.into_iter().enumerate().map(|(i, v)| (format!(".{i}"), v)).collect();
+                    let ref_id = self.register_children(children);
+                    Variable {
+                        name,
+                        value: "(...)".to_string(),
+                        variables_reference: ref_id,
+                        ..Default::default()
+                    }
+                }
+            }
             CairoValue::Enum { type_name, variant_name, variant_value } => {
                 let display_name = format!("{type_name}::{variant_name}");
                 let ref_id = self.register_children(vec![("value".to_string(), *variant_value)]);
@@ -260,6 +286,14 @@ impl CallStack {
             }
             CairoValue::Other(value) => {
                 Variable { name, value, variables_reference: 0, ..Default::default() }
+            }
+            CairoValue::Snapshot(value) => {
+                let variable = self.cairo_value_to_variable(name, *value);
+                Variable { value: format!("@{}", variable.value), ..variable }
+            }
+            CairoValue::NonZero(value) => {
+                let variable = self.cairo_value_to_variable(name, *value);
+                Variable { value: format!("NonZero({})", variable.value), ..variable }
             }
         }
     }
