@@ -284,6 +284,30 @@ impl CallStack {
                     ..Default::default()
                 }
             }
+            CairoValue::Array { elements } => {
+                if elements.is_empty() {
+                    Variable {
+                        name,
+                        value: "[]".to_string(),
+                        variables_reference: 0,
+                        ..Default::default()
+                    }
+                } else {
+                    let len = elements.len();
+                    let children = elements
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, v)| (format!("[{i}]"), v))
+                        .collect();
+                    let ref_id = self.register_children(children);
+                    Variable {
+                        name,
+                        value: format!("[{len}]"),
+                        variables_reference: ref_id,
+                        ..Default::default()
+                    }
+                }
+            }
             CairoValue::Other(value) => {
                 Variable { name, value, variables_reference: 0, ..Default::default() }
             }
