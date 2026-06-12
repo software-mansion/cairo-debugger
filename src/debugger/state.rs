@@ -18,8 +18,6 @@ type SourcePath = String;
 mod call_stack;
 mod ui_state;
 
-pub use call_stack::RequestedVariables;
-
 pub struct State {
     configuration_done: bool,
     execution_stopped: bool,
