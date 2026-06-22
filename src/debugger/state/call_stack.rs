@@ -224,102 +224,71 @@ impl CallStack {
 
     fn cairo_value_to_variable(&mut self, name: String, value: CairoValue) -> Variable {
         match value {
-            CairoValue::Bool(value) => Variable {
-                name,
-                value: value.to_string(),
-                variables_reference: 0,
-                ..Default::default()
-            },
-            CairoValue::FeltLike(value) => Variable {
-                name,
-                value: value.to_string(),
-                variables_reference: 0,
-                ..Default::default()
-            },
+            CairoValue::Bool(v) => leaf_variable(name, v.to_string()),
+            CairoValue::FeltLike(v) => leaf_variable(name, v.to_string()),
+            CairoValue::Other(v) => leaf_variable(name, v),
             CairoValue::Struct { type_name, fields } => {
                 if fields.is_empty() {
-                    Variable {
-                        name,
-                        value: "()".to_string(),
-                        variables_reference: 0,
-                        ..Default::default()
-                    }
+                    leaf_variable(name, "()".to_string())
                 } else {
-                    let ref_id = self.register_children(fields);
-                    Variable {
-                        name,
-                        value: type_name,
-                        variables_reference: ref_id,
-                        ..Default::default()
-                    }
+                    self.expandable_variable(name, type_name, fields)
                 }
             }
             CairoValue::Tuple(fields) => {
                 if fields.is_empty() {
-                    Variable {
-                        name,
-                        value: "()".to_string(),
-                        variables_reference: 0,
-                        ..Default::default()
-                    }
+                    leaf_variable(name, "()".to_string())
                 } else {
                     let children =
                         fields.into_iter().enumerate().map(|(i, v)| (format!(".{i}"), v)).collect();
-                    let ref_id = self.register_children(children);
-                    Variable {
-                        name,
-                        value: "(...)".to_string(),
-                        variables_reference: ref_id,
-                        ..Default::default()
-                    }
+                    self.expandable_variable(name, "(...)".to_string(), children)
                 }
             }
             CairoValue::Enum { type_name, variant_name, variant_value } => {
-                let display_name = format!("{type_name}::{variant_name}");
-                let ref_id = self.register_children(vec![("value".to_string(), *variant_value)]);
-                Variable {
-                    name,
-                    value: display_name,
-                    variables_reference: ref_id,
-                    ..Default::default()
+                let display = format!("{type_name}::{variant_name}");
+                if variant_value.is_like_unit_type() {
+                    leaf_variable(name, display)
+                } else {
+                    self.expandable_variable(
+                        name,
+                        display,
+                        vec![("value".to_string(), *variant_value)],
+                    )
                 }
             }
             CairoValue::Array { element_type, elements } => {
                 let type_display = format!("Array<{element_type}>");
                 if elements.is_empty() {
-                    Variable {
-                        name,
-                        value: type_display,
-                        variables_reference: 0,
-                        ..Default::default()
-                    }
+                    leaf_variable(name, type_display)
                 } else {
                     let children = elements
                         .into_iter()
                         .enumerate()
                         .map(|(i, v)| (format!("[{i}]"), v))
                         .collect();
-                    let ref_id = self.register_children(children);
-                    Variable {
-                        name,
-                        value: type_display,
-                        variables_reference: ref_id,
-                        ..Default::default()
-                    }
+                    self.expandable_variable(name, type_display, children)
                 }
             }
-            CairoValue::Other(value) => {
-                Variable { name, value, variables_reference: 0, ..Default::default() }
+            CairoValue::Snapshot(v) => {
+                let mut var = self.cairo_value_to_variable(name, *v);
+                var.value = format!("@{}", var.value);
+                var
             }
-            CairoValue::Snapshot(value) => {
-                let variable = self.cairo_value_to_variable(name, *value);
-                Variable { value: format!("@{}", variable.value), ..variable }
-            }
-            CairoValue::NonZero(value) => {
-                let variable = self.cairo_value_to_variable(name, *value);
-                Variable { value: format!("NonZero({})", variable.value), ..variable }
+            CairoValue::NonZero(v) => {
+                let mut var = self.cairo_value_to_variable(name, *v);
+                var.value = format!("NonZero({})", var.value);
+                var
             }
         }
+    }
+
+    fn expandable_variable(
+        &mut self,
+        name: String,
+        value: String,
+        children: Vec<(String, CairoValue)>,
+    ) -> Variable {
+        let ref_id = self.register_children(children);
+        Variable { name, value, variables_reference: ref_id, ..Default::default() }
     }
 
     fn register_children(&mut self, children: Vec<(String, CairoValue)>) -> i64 {
@@ -518,6 +487,10 @@ impl SierraFunctionContext {
 
         self.post_statements_registers.extend(executed_statements);
     }
+}
+
+fn leaf_variable(name: String, value: String) -> Variable {
+    Variable { name, value, variables_reference: 0, ..Default::default() }
 }
 
 enum Action {
