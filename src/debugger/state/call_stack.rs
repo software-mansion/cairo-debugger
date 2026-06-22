@@ -284,16 +284,16 @@ impl CallStack {
                     ..Default::default()
                 }
             }
-            CairoValue::Array { elements } => {
+            CairoValue::Array { element_type, elements } => {
+                let type_display = format!("Array<{element_type}>");
                 if elements.is_empty() {
                     Variable {
                         name,
-                        value: "[]".to_string(),
+                        value: type_display,
                         variables_reference: 0,
                         ..Default::default()
                     }
                 } else {
-                    let len = elements.len();
                     let children = elements
                         .into_iter()
                         .enumerate()
@@ -302,7 +302,7 @@ impl CallStack {
                     let ref_id = self.register_children(children);
                     Variable {
                         name,
-                        value: format!("[{len}]"),
+                        value: type_display,
                         variables_reference: ref_id,
                         ..Default::default()
                     }
