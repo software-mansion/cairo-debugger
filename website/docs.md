@@ -25,10 +25,11 @@ Make sure the cairo compiler configuration in your workspace `Scarb.toml` is equ
 
 ```toml
 [profile.dev.cairo]
+skip-optimizations = true
 add-statements-code-locations-debug-info = true
 add-statements-functions-debug-info = true
 add-functions-debug-info = true
-skip-optimizations = true
+add-types-debug-info = true
 ```
 
 ## Usage
