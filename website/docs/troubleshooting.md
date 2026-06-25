@@ -39,6 +39,10 @@ From **snforge** `0.62.0` onwards, the debugger additionally supports:
 - `NonZero` displayed as e.g. `NonZero(5)` 
 - common Starknet types (`ContractAddress`, `ClassHash`, `StorageAddress`, `StorageBaseAddress`) displayed in hexadecimal format e.g. `ContractAddress(0x5af)`
 
+> [!WARNING]
+> The support for structs and enums works best with **Scarb** >= 2.19.0 - previous versions cannot produce some of the debug information.
+> You may still use other Scarb versions but names of structs, enums, their fields and variants will not be available.
+
 ## Contract calls are skipped
 
 Currently, the debugger does not enter contract calls. 
