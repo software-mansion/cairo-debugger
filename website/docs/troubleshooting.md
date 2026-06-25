@@ -28,9 +28,16 @@ This is a result of an optimization applied during Sierra to CASM compilation th
 
 ## Some variables are not shown
 
-Currently, the debugger only supports simple numeric variables than can fit within single `felt252`.
+Prior to **snforge** `0.62.0`, the debugger only displayed simple numeric variables that fit within a single `felt252`.
 
-Support for complex types and arrays is in progress - you can track it [here](https://github.com/software-mansion/cairo-debugger/issues/101) and [here](https://github.com/software-mansion/cairo-debugger/issues/103).
+From **snforge** `0.62.0` onwards, the debugger additionally supports:
+- structs
+- enums
+- arrays and spans
+- tuples
+- `bool` displayed as `true/false`
+- `NonZero` displayed as e.g. `NonZero(5)` 
+- common Starknet types (`ContractAddress`, `ClassHash`, `StorageAddress`, `StorageBaseAddress`) displayed in hexadecimal format e.g. `ContractAddress(0x5af)`
 
 ## Contract calls are skipped
 
