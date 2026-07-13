@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-cairo-annotations = { git = "https://github.com/software-mansion/cairo-annotations", rev = "ff307d9f0ab4c6514b90698e3ce29d91f8e0ce56", features = ["cairo-lang"] }
+cairo-annotations = { git = "https://github.com/software-mansion/cairo-annotations", rev = "78735bade42b4a9cb5505a53736ed28002d9d151", features = ["cairo-lang"] }
 cairo-lang-casm = "2.17.0"
 cairo-lang-sierra = "2.17.0"
 cairo-lang-sierra-to-casm = "2.17.0"

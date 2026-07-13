@@ -7,7 +7,9 @@ use cairo_annotations::annotations::TryFromDebugInfo;
 use cairo_annotations::annotations::coverage::{
     CodeLocation, CoverageAnnotationsV1 as SierraCodeLocations,
 };
-use cairo_annotations::annotations::debugger::DebuggerAnnotationsV1 as FunctionsDebugInfo;
+use cairo_annotations::annotations::debugger::{
+    DebuggerAnnotationsV2 as FunctionsDebugInfo, FunctionDebugInfoV2, VersionedDebuggerAnnotations,
+};
 use cairo_annotations::annotations::profiler::{
     FunctionName, ProfilerAnnotationsV1 as SierraFunctionNames,
 };
@@ -74,8 +76,11 @@ impl Context {
 
         let code_locations = SierraCodeLocations::try_from_debug_info(&debug_info)
             .context("statements code locations debug info is missing - enable generating it in your Scarb.toml")?;
-        let functions_debug_info = FunctionsDebugInfo::try_from_debug_info(&debug_info)
-            .context("functions debug info is missing - enable generating it in your Scarb.toml")?;
+        let versioned_functions_debug_info = VersionedDebuggerAnnotations::try_from_debug_info(
+            &debug_info,
+        )
+        .context("functions debug info is missing - enable generating it in your Scarb.toml")?;
+        let functions_debug_info = into_functions_debug_info_v2(versioned_functions_debug_info);
         let function_names = SierraFunctionNames::try_from_debug_info(&debug_info).context(
             "statements functions debug info is missing - enable generating it in your Scarb.toml",
         )?;
@@ -277,6 +282,33 @@ impl Context {
         });
 
         eprintln!("{} {with_labels}", statement_idx.0);
+    }
+}
+
+/// Normalizes versioned debugger annotations to the V2 shape, which the rest of the debugger
+/// codebase treats as the canonical format. V1's single Cairo variable per Sierra variable is
+/// a subset of V2's multimap, so a V1 payload is wrapped into single-element vectors.
+fn into_functions_debug_info_v2(versioned: VersionedDebuggerAnnotations) -> FunctionsDebugInfo {
+    match versioned {
+        VersionedDebuggerAnnotations::V2(v2) => v2,
+        VersionedDebuggerAnnotations::V1(v1) => FunctionsDebugInfo {
+            functions_info: v1
+                .functions_info
+                .into_iter()
+                .map(|(function_id, info)| {
+                    let function_info = FunctionDebugInfoV2 {
+                        function_file_path: info.function_file_path,
+                        function_code_span: info.function_code_span,
+                        sierra_to_cairo_variables: info
+                            .sierra_to_cairo_variable
+                            .into_iter()
+                            .map(|(var_id, cairo_var)| (var_id, vec![cairo_var]))
+                            .collect(),
+                    };
+                    (function_id, function_info)
+                })
+                .collect(),
+        },
     }
 }
 

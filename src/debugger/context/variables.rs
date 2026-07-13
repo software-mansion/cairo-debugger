@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 
 use cairo_annotations::annotations::coverage::SourceCodeSpan;
 use cairo_annotations::annotations::debugger::{
-    DebuggerAnnotationsV1 as FunctionsDebugInfo, FunctionDebugInfo, SierraFunctionId, SierraVarId,
+    DebuggerAnnotationsV2 as FunctionsDebugInfo, SierraFunctionId, SierraVarId,
 };
 use cairo_lang_sierra::ids::VarId;
 use cairo_lang_sierra::program::{GenBranchTarget, Program, Statement, StatementIdx};
@@ -64,6 +64,22 @@ pub fn build_cairo_var_to_casm_map(
     functions_debug_info: FunctionsDebugInfo,
 ) -> HashMap<StatementIdx, CairoVarsInStatement> {
     let mut result = HashMap::new();
+
+    // The iterator here is a deliberate choice - check doc comment of `extract_cairo_var_map`.
+    let mut functions_sierra_to_cairo_vars: HashMap<_, HashMap<_, std::slice::Iter<_>>> =
+        functions_debug_info
+            .functions_info
+            .iter()
+            .map(|(function_id, func_debug_info)| {
+                let sierra_to_cairo_var_map: HashMap<_, std::slice::Iter<_>> = func_debug_info
+                    .sierra_to_cairo_variables
+                    .iter()
+                    .map(|(sierra_id, cairo_vars)| (sierra_id, cairo_vars.iter()))
+                    .collect();
+                (function_id, sierra_to_cairo_var_map)
+            })
+            .collect();
+
     for (idx, statement_debug_info) in casm_debug_info.sierra_statement_info.iter().enumerate() {
         // Join information from casm debug info and sierra program to get casm reference for each
         // sierra var id. This is implemented as collecting vectors of `CairoVarReference`.
@@ -121,14 +137,23 @@ pub fn build_cairo_var_to_casm_map(
             };
 
         let function_id = &sierra_function_for_statement(idx, program).id;
-        let func_debug_info =
-            &functions_debug_info.functions_info[&SierraFunctionId(function_id.id)];
+        let Some(func_sierra_to_cairo_vars) =
+            functions_sierra_to_cairo_vars.get_mut(&SierraFunctionId(function_id.id))
+        else {
+            // TODO: fix in the compiler
+            eprintln!(
+                "function {} should be present in the variable map",
+                function_id.debug_name.as_deref().unwrap_or_default()
+            );
+            continue;
+        };
 
-        let consumed = extract_cairo_var_map(consumed, func_debug_info);
+        let consumed = extract_cairo_var_map(consumed, func_sierra_to_cairo_vars);
         let produced: HashMap<_, _> = produced
             .into_iter()
             .map(|(branch_target, cairo_var_refs)| {
-                let produced_in_branch = extract_cairo_var_map(cairo_var_refs, func_debug_info);
+                let produced_in_branch =
+                    extract_cairo_var_map(cairo_var_refs, func_sierra_to_cairo_vars);
                 (branch_target, produced_in_branch)
             })
             .collect();
@@ -141,17 +166,32 @@ pub fn build_cairo_var_to_casm_map(
     result
 }
 
-/// For each var reference use its sierra var id to get the Cairo variable it corresponds to.
+/// For each var reference use its Sierra var id to get the Cairo variable it corresponds to.
+///
+/// A single sierra var id can map to multiple Cairo variables (e.g, when its id is reused for a
+/// rebinding such as `let y = x;`).
+/// That's why values in `func_sierra_to_cairo_vars` are iterators. At the caller site sierra
+/// statements are processed in the same order debug info is produced
+/// (by increasing [`StatementIdx`]). Therefore, each time we extract the Cairo var definition
+/// from the map, we consume it, which ensures that the reused sierra var ids in following sierra
+/// statements are mapped to correct Cairo var definitions.
+/// TODO: add an example.
 fn extract_cairo_var_map(
     var_refs: Vec<CairoVarReference>,
-    func_debug_info: &FunctionDebugInfo,
+    func_sierra_to_cairo_vars: &mut HashMap<
+        &SierraVarId,
+        std::slice::Iter<(String, SourceCodeSpan)>,
+    >,
 ) -> HashMap<CairoVarId, CairoVarReference> {
     var_refs
         .into_iter()
         .filter_map(|var_ref| {
-            let (name, span) =
-                func_debug_info.sierra_to_cairo_variable.get(&SierraVarId(var_ref.sierra_id.id))?;
-            let var_id = CairoVarId { name: name.clone(), definition_span: span.clone() };
+            let (name, definition_span) = func_sierra_to_cairo_vars
+                .get_mut(&SierraVarId(var_ref.sierra_id.id))?
+                .next()?
+                .clone();
+
+            let var_id = CairoVarId { name, definition_span };
 
             Some((var_id, var_ref))
         })
