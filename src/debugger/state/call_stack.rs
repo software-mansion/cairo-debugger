@@ -14,7 +14,9 @@ use indexmap::IndexMap;
 
 use crate::debugger::MIN_OBJECT_REFERENCE;
 use crate::debugger::context::Context;
-use crate::debugger::state::call_stack::variables::get_values_of_variables;
+use crate::debugger::state::call_stack::variables::{
+    get_values_of_function_params, get_values_of_variables,
+};
 
 mod variables;
 
@@ -181,11 +183,30 @@ impl CallStack {
         ctx: &Context,
         vm: &VirtualMachine,
     ) -> FunctionVariables {
-        get_values_of_variables(
+        let mut current_function_params = {
+            let last_executed_statement = self
+                .current_sierra_function_context
+                .last_executed_statement
+                .expect("last executed statement for current function should be set here - we are after pre-step update");
+            // Access to function params in VM's memory is based only on FP,
+            // which is fixed for each function execution (frame).
+            let registers_values = RegistersValues { ap: 0, fp: vm.get_fp().offset };
+
+            get_values_of_function_params(ctx, vm, last_executed_statement, &registers_values)
+                .unwrap_or_default()
+        };
+
+        let current_function_variables = get_values_of_variables(
             ctx,
             vm,
             &self.current_sierra_function_context.post_statements_registers,
-        )
+        );
+
+        // Extend params with local variables so that local variables override params if there is
+        // a repetition (e.g. because a param variable changed its value).
+        current_function_params.names_to_values.extend(current_function_variables.names_to_values);
+
+        current_function_params
     }
 
     pub fn get_variables(

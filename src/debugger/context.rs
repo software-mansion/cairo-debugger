@@ -19,7 +19,7 @@ use cairo_lang_sierra::extensions::core::{CoreConcreteLibfunc, CoreTypeConcrete}
 use cairo_lang_sierra::extensions::lib_func::BranchSignature;
 use cairo_lang_sierra::extensions::types::TypeInfo;
 use cairo_lang_sierra::extensions::{ConcreteLibfunc, ConcreteType};
-use cairo_lang_sierra::ids::{ConcreteTypeId, VarId};
+use cairo_lang_sierra::ids::{ConcreteTypeId, FunctionId, VarId};
 use cairo_lang_sierra::program::{
     Function, GenBranchTarget, GenInvocation, Program, ProgramArtifact, Statement, StatementIdx,
 };
@@ -29,7 +29,9 @@ use cairo_lang_sierra_type_size::ProgramRegistryInfo;
 use scarb_metadata::MetadataCommand;
 
 use crate::debugger::context::file_locations::{FileCodeLocationsData, build_file_locations_map};
-use crate::debugger::context::variables::build_cairo_var_to_casm_map;
+use crate::debugger::context::variables::{
+    build_cairo_var_to_casm_map, build_function_to_param_vars_map,
+};
 
 mod file_locations;
 #[cfg(feature = "dev")]
@@ -46,6 +48,7 @@ pub struct Context {
     casm_debug_info: CairoProgramDebugInfo,
     files_data: HashMap<PathBuf, FileCodeLocationsData>,
     pub cairo_var_map: HashMap<StatementIdx, CairoVarsInStatement>,
+    pub function_param_var_map: HashMap<FunctionId, HashMap<CairoVarId, CairoVarReference>>,
     #[cfg(feature = "dev")]
     labels: HashMap<usize, String>,
 }
@@ -85,7 +88,12 @@ impl Context {
         let casm_debug_info =
             compile_sierra_to_get_casm_debug_info(&program, &program_registry_info)?;
         let cairo_var_map =
-            build_cairo_var_to_casm_map(&program, &casm_debug_info, functions_debug_info);
+            build_cairo_var_to_casm_map(&program, &casm_debug_info, &functions_debug_info);
+        let function_param_var_map = build_function_to_param_vars_map(
+            &program,
+            &program_registry_info.type_sizes,
+            &functions_debug_info,
+        );
 
         let files_data = build_file_locations_map(&casm_debug_info, &code_locations);
 
@@ -109,6 +117,7 @@ impl Context {
             casm_debug_info,
             files_data,
             cairo_var_map,
+            function_param_var_map,
         })
     }
 

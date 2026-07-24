@@ -3,13 +3,16 @@ use cairo_lang_casm::cell_expression::CellExpression;
 use cairo_lang_sierra::extensions::core::CoreTypeConcrete;
 use cairo_lang_sierra::extensions::modules::starknet::StarknetTypeConcrete;
 use cairo_lang_sierra::ids::ConcreteTypeId;
+use cairo_lang_sierra::program::StatementIdx;
 use cairo_vm::types::relocatable::{MaybeRelocatable, Relocatable};
 use cairo_vm::vm::vm_core::VirtualMachine;
 use indexmap::IndexMap;
 use tracing::warn;
 
 use crate::debugger::context::{CairoVarId, CairoVarReference, Context};
-use crate::debugger::state::call_stack::{FunctionVariables, PostStatementsRegisters};
+use crate::debugger::state::call_stack::{
+    FunctionVariables, PostStatementsRegisters, RegistersValues,
+};
 
 mod type_name;
 mod vm_reader;
@@ -115,6 +118,27 @@ pub fn get_values_of_variables(
         current_var_values.into_iter().map(|(name, (_, _, value))| (name, value)).collect();
 
     FunctionVariables { names_to_values }
+}
+
+pub fn get_values_of_function_params(
+    ctx: &Context,
+    vm: &VirtualMachine,
+    last_executed_statement: StatementIdx,
+    registers_values: &RegistersValues,
+) -> Option<FunctionVariables> {
+    let function = ctx.sierra_function_for_statement(last_executed_statement);
+    let params = ctx.function_param_var_map.get(&function.id)?;
+
+    let reader = VmReader::new(vm, registers_values);
+    let names_to_values: IndexMap<_, _> = params
+        .iter()
+        .filter_map(|(CairoVarId { name, .. }, CairoVarReference { sierra_id, ref_expr })| {
+            let type_id = &function.params.iter().find(|param| &param.id == sierra_id).unwrap().ty;
+            Some((name.to_string(), extract_var_value(&ref_expr.cells, type_id, &reader, ctx)?))
+        })
+        .collect();
+
+    Some(FunctionVariables { names_to_values })
 }
 
 fn extract_var_value(
