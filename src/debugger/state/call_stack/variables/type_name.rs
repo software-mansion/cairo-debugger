@@ -28,6 +28,11 @@ pub fn format_type_name(type_id: &ConcreteTypeId, ctx: &Context) -> String {
         CoreTypeConcrete::Nullable(inner) => {
             format!("Nullable<{}>", format_type_name(&inner.ty, ctx))
         }
+        CoreTypeConcrete::Felt252Dict(info)
+        | CoreTypeConcrete::Felt252DictEntry(info)
+        | CoreTypeConcrete::SquashedFelt252Dict(info) => {
+            format!("Felt252Dict<{}>", format_type_name(&info.ty, ctx))
+        }
         CoreTypeConcrete::Felt252(_) => "felt252".to_string(),
         CoreTypeConcrete::Uint8(_) => "u8".to_string(),
         CoreTypeConcrete::Uint16(_) => "u16".to_string(),
