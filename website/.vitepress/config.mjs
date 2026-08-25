@@ -40,6 +40,8 @@ export default defineConfig({
     lang,
     base,
 
+    transformHead: (context) => [swmStructuredData(context)],
+    buildEnd: writeLlmsTxt,
     head: [
         ["meta", {httpEquiv: "Content-Language", content: lang}],
         ["link", {rel: "icon", href: `${base}favicon.svg`, type: "image/x-icon"}],
