@@ -4,6 +4,7 @@ use cairo_lang_sierra::extensions::core::CoreTypeConcrete;
 use cairo_lang_sierra::extensions::modules::starknet::StarknetTypeConcrete;
 use cairo_lang_sierra::ids::ConcreteTypeId;
 use cairo_lang_sierra::program::StatementIdx;
+use cairo_vm::Felt252;
 use cairo_vm::types::relocatable::{MaybeRelocatable, Relocatable};
 use cairo_vm::vm::vm_core::VirtualMachine;
 use indexmap::IndexMap;
@@ -23,13 +24,15 @@ use vm_reader::VmReader;
 #[derive(Clone, Debug, PartialEq)]
 pub enum CairoValue {
     Bool(bool),
-    FeltLike(cairo_vm::Felt252),
+    FeltLike(Felt252),
     Struct { type_name: String, fields: Vec<(String, CairoValue)> },
     Enum { type_name: String, variant_name: String, variant_value: Box<CairoValue> },
     Tuple(Vec<CairoValue>),
     Array { element_type: String, elements: Vec<CairoValue> },
     Snapshot(Box<CairoValue>),
     NonZero(Box<CairoValue>),
+    Nullable(Option<Box<CairoValue>>),
+    Dict { value_type: String, entries: Vec<(Felt252, CairoValue)> },
     Other(String),
 }
 
@@ -175,6 +178,27 @@ fn maybe_relocatables_to_cairo_value(
             maybe_relocatables_to_cairo_value(values, &inner.ty, reader, ctx)
                 .map(|v| CairoValue::NonZero(Box::new(v)))
         }
+        CoreTypeConcrete::Nullable(inner) => match values[0] {
+            MaybeRelocatable::Int(f) if f == Felt252::ZERO => Some(CairoValue::Nullable(None)),
+            MaybeRelocatable::RelocatableValue(boxed_ptr) => {
+                let size = ctx.type_size(&inner.ty);
+                let boxed_values = (0..size)
+                    .map(|i| {
+                        reader.read_relocatable(Relocatable {
+                            segment_index: boxed_ptr.segment_index,
+                            offset: boxed_ptr.offset + i,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let value =
+                    maybe_relocatables_to_cairo_value(&boxed_values, &inner.ty, reader, ctx)?;
+                Some(CairoValue::Nullable(Some(Box::new(value))))
+            }
+            MaybeRelocatable::Int(_) => {
+                warn!("expected zero or relocatable for nullable, got nonzero felt");
+                None
+            }
+        },
         CoreTypeConcrete::Struct(struct_type) => {
             let type_long_id = &ctx.var_type_info(type_id).long_id;
             let slices = member_slices(&struct_type.members, values, ctx)?;
@@ -257,6 +281,33 @@ fn maybe_relocatables_to_cairo_value(
                 variant_value: Box::new(variant_value),
             })
         }
+        CoreTypeConcrete::Felt252Dict(info) => {
+            let MaybeRelocatable::RelocatableValue(current) = values[0] else {
+                warn!("expected relocatable for dict pointer");
+                return None;
+            };
+            let start = Relocatable { segment_index: current.segment_index, offset: 0 };
+            extract_dict_entries(start, current.offset, &info.ty, reader, ctx)
+        }
+        CoreTypeConcrete::Felt252DictEntry(info) => {
+            let MaybeRelocatable::RelocatableValue(current) = values[0] else {
+                warn!("expected relocatable for dict entry pointer");
+                return None;
+            };
+            let start = Relocatable { segment_index: current.segment_index, offset: 0 };
+            // The in-flight access (key + prev_value already written, new_value not yet
+            // finalized) isn't a complete triple, so it's excluded from the committed contents.
+            let committed_end = (current.offset / DICT_ACCESS_SIZE) * DICT_ACCESS_SIZE;
+            extract_dict_entries(start, committed_end, &info.ty, reader, ctx)
+        }
+        CoreTypeConcrete::SquashedFelt252Dict(info) => {
+            let (start_ptr, end_ptr) = extract_array_pointers(values)?;
+            if start_ptr.segment_index != end_ptr.segment_index {
+                warn!("squashed dict start and end pointers in different segments");
+                return None;
+            }
+            extract_dict_entries(start_ptr, end_ptr.offset, &info.ty, reader, ctx)
+        }
         CoreTypeConcrete::Starknet(starknet_type) => {
             let type_name = match starknet_type {
                 StarknetTypeConcrete::ContractAddress(_) => Some("ContractAddress"),
@@ -293,6 +344,51 @@ fn fallback_value(values: &[MaybeRelocatable], type_id: &ConcreteTypeId) -> Opti
             Some(CairoValue::Other(format!("[{joined}]")))
         }
     }
+}
+
+/// Number of felt cells per dict access: `[key, prev_value, new_value]`.
+/// Every `felt252_dict` write (via entry get/finalize) or squash appends one such triple to the
+/// dict's own memory segment, so the current contents can be reconstructed by scanning it.
+const DICT_ACCESS_SIZE: usize = 3;
+
+/// Reconstructs the current key-value contents of a `Felt252Dict` (or its squashed form) by
+/// scanning its backing segment for `[key, prev_value, new_value]` triples from `start` up to
+/// (but excluding) `end_offset`. Later triples for the same key override earlier ones, matching
+/// the dict's actual current state.
+fn extract_dict_entries(
+    start: Relocatable,
+    end_offset: usize,
+    value_type_id: &ConcreteTypeId,
+    reader: &VmReader<'_>,
+    ctx: &Context,
+) -> Option<CairoValue> {
+    let mut raw_values: IndexMap<Felt252, MaybeRelocatable> = IndexMap::new();
+    let Relocatable { segment_index, mut offset } = start;
+
+    while offset < end_offset {
+        let key_cell = Relocatable { segment_index, offset };
+        let value_cell = Relocatable { segment_index, offset: offset + 2 };
+
+        let Some(MaybeRelocatable::Int(key)) = reader.read_relocatable(key_cell) else {
+            warn!("expected felt for dict key, got relocatable or missing value");
+            return None;
+        };
+        let value = reader.read_relocatable(value_cell)?;
+
+        raw_values.insert(key, value);
+        offset += DICT_ACCESS_SIZE;
+    }
+
+    let value_type = format_type_name(value_type_id, ctx);
+    let entries = raw_values
+        .into_iter()
+        .map(|(key, value)| {
+            let value = maybe_relocatables_to_cairo_value(&[value], value_type_id, reader, ctx)?;
+            Some((key, value))
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    Some(CairoValue::Dict { value_type, entries })
 }
 
 fn extract_array_pointers(values: &[MaybeRelocatable]) -> Option<(Relocatable, Relocatable)> {

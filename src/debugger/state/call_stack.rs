@@ -299,6 +299,18 @@ impl CallStack {
                 var.value = format!("NonZero({})", var.value);
                 var
             }
+            CairoValue::Nullable(None) => leaf_variable(name, "null".to_string()),
+            CairoValue::Nullable(Some(v)) => self.cairo_value_to_variable(name, *v),
+            CairoValue::Dict { value_type, entries } => {
+                let type_display = format!("Felt252Dict<{value_type}>");
+                if entries.is_empty() {
+                    leaf_variable(name, type_display)
+                } else {
+                    let children =
+                        entries.into_iter().map(|(key, v)| (format!("[{key}]"), v)).collect();
+                    self.expandable_variable(name, type_display, children)
+                }
+            }
         }
     }
 
