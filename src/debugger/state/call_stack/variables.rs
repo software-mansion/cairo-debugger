@@ -81,11 +81,6 @@ pub fn get_values_of_variables(
 
             let num_cells = ref_expr.cells.len();
 
-            // TODO(#128): fix unit type mappings
-            if num_cells == 0 {
-                continue;
-            }
-
             let Some(value) = extract_var_value(&ref_expr.cells, &type_id, &reader, ctx) else {
                 continue;
             };
