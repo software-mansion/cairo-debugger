@@ -17,20 +17,23 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo test --release
 
   check:
     name: Check formatting, linter, docs and unused dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo fmt --check
       - run: cargo install cargo-all-features
       - run: cargo lint
@@ -41,5 +44,7 @@ jobs:
         env:
           # Make sure CI fails on all warnings, including Clippy lints.
           RUSTDOCFLAGS: "-Dwarnings"
-      - uses: taiki-e/install-action@cargo-machete
+      - uses: taiki-e/install-action@v2.90.3
+        with:
+          tool: cargo-machete
       - run: cargo machete
