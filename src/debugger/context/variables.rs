@@ -129,7 +129,8 @@ pub fn build_cairo_var_to_casm_map(
         let produced: HashMap<_, _> = produced
             .into_iter()
             .map(|(branch_target, cairo_var_refs)| {
-                let produced_in_branch = extract_cairo_var_map(cairo_var_refs, func_debug_info);
+                let produced_in_branch =
+                    extract_produced_cairo_var_map(cairo_var_refs, func_debug_info);
                 (branch_target, produced_in_branch)
             })
             .collect();
@@ -230,6 +231,18 @@ pub fn build_function_to_param_vars_map(
         .collect()
 }
 
+fn extract_produced_cairo_var_map(
+    var_refs: Vec<CairoVarReference>,
+    func_debug_info: &FunctionDebugInfo,
+) -> HashMap<CairoVarId, CairoVarReference> {
+    // `add_assign` produces the updated `ref` value followed by its zero-sized `()` return value,
+    // and debugger annotations may associate both results with the mutated Cairo variable. Drop
+    // zero-sized results before collecting so they cannot replace data-carrying values.
+    let var_refs =
+        var_refs.into_iter().filter(|var_ref| !var_ref.ref_expr.cells.is_empty()).collect();
+    extract_cairo_var_map(var_refs, func_debug_info)
+}
+
 /// For each var reference use its sierra var id to get the Cairo variable it corresponds to.
 fn extract_cairo_var_map(
     var_refs: Vec<CairoVarReference>,
@@ -245,4 +258,47 @@ fn extract_cairo_var_map(
             Some((var_id, var_ref))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use cairo_annotations::annotations::coverage::{
+        ColumnNumber, LineNumber, SourceCodeLocation, SourceFileFullPath,
+    };
+    use cairo_lang_casm::cell_expression::CellExpression;
+
+    use super::*;
+
+    #[test]
+    fn unit_result_of_add_assign_does_not_replace_mutated_variable() {
+        // `x += 5` produces both the updated `x` and the zero-sized `()` returned by
+        // `add_assign`. Debug annotations may associate both Sierra variables with `x`.
+        let location = SourceCodeLocation { line: LineNumber(1), col: ColumnNumber(0) };
+        let span = SourceCodeSpan { start: location.clone(), end: location };
+        let x = ("x".to_owned(), span.clone());
+        let func_debug_info = FunctionDebugInfo {
+            function_file_path: SourceFileFullPath("lib.cairo".to_owned()),
+            function_code_span: span.clone(),
+            sierra_to_cairo_variable: HashMap::from([
+                (SierraVarId(0), x.clone()),
+                (SierraVarId(1), x),
+            ]),
+            parameters: None,
+        };
+        let updated_x = CairoVarReference {
+            sierra_id: VarId::new(0),
+            ref_expr: ReferenceExpression { cells: vec![CellExpression::Immediate(5.into())] },
+        };
+        let unit_result = CairoVarReference {
+            sierra_id: VarId::new(1),
+            ref_expr: ReferenceExpression::zero_sized(),
+        };
+
+        let variables =
+            extract_produced_cairo_var_map(vec![updated_x, unit_result], &func_debug_info);
+        let x = CairoVarId { name: "x".to_owned(), definition_span: span };
+
+        assert_eq!(variables[&x].sierra_id, VarId::new(0));
+        assert_eq!(variables[&x].ref_expr.cells.len(), 1);
+    }
 }
